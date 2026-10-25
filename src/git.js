@@ -117,6 +117,11 @@ export class GitHub {
     const result = await this.gh(['api',`repos/${this.config.githubRepo}/commits/${sha}/check-runs`]);
     return (JSON.parse(result.stdout).check_runs || []).map(run => ({name:run.name,conclusion:run.conclusion,state:run.status}));
   }
+  async workflowRunsForCommit(sha) {
+    const result = await this.gh(['run','list','--repo',this.config.githubRepo,'--commit',sha,'--limit','100','--json','status,conclusion,headSha,workflowName']);
+    return JSON.parse(result.stdout).filter(run => run.headSha === sha)
+      .map(run => ({name:run.workflowName || 'GitHub workflow',conclusion:run.conclusion,state:run.status}));
+  }
   async triggerWebCheck(branch) {
     await this.gh(['workflow','run','web-checks.yml','--repo',this.config.githubRepo,'--ref',branch]);
   }
@@ -127,8 +132,8 @@ export class GitHub {
   }
   async waitForChecks(number, expectedHead) {
     const deadline = Date.now() + (this.config.checksTimeoutMs || 20 * 60_000);
-    const started = Date.now();
     let seenExpectedHead = false;
+    let headSeenAt = 0;
     let triggered = false;
     while (Date.now() < deadline) {
       const info = await this.prInfo(number);
@@ -137,17 +142,22 @@ export class GitHub {
         await new Promise(resolve => setTimeout(resolve, this.config.checksPollMs ?? 10_000));
         continue;
       }
+      if (!seenExpectedHead) headSeenAt = Date.now();
       seenExpectedHead = true;
       const required = (this.config.requiredPrCheck || 'web').toLowerCase();
       const rollup = info.statusCheckRollup || [];
       const hasRequired = rollup.some(check => (check.name || check.context || '').toLowerCase().includes(required));
-      const checks = hasRequired || !info.headRefName ? rollup : [...rollup,...await this.checkRunsForCommit(expectedHead)];
+      const checks = [
+        ...(hasRequired || !info.headRefName ? rollup : [...rollup,...await this.checkRunsForCommit(expectedHead)]),
+        ...await this.workflowRunsForCommit(expectedHead)
+      ];
       const failed = checks.filter(check => /failure|error|timed_out|cancelled|action_required|startup_failure/i.test(check.conclusion || check.state || ''));
       if (failed.length) throw new Error(`PR #${number} checks failed: ${failed.map(check => check.name || check.context || 'unknown').join(', ')}`);
       const pending = checks.filter(check => !/success|neutral|skipped/i.test(check.conclusion || check.state || ''));
       const requiredChecks = checks.filter(check => (check.name || check.context || '').toLowerCase().includes(required));
-      if (!pending.length && requiredChecks.some(check => /success/i.test(check.conclusion || check.state || ''))) return checks.length;
-      if (!requiredChecks.length && !triggered && required === 'web' && info.headRefName && Date.now() - started >= (this.config.checksStartGraceMs ?? 30_000)) {
+      if (!pending.length && requiredChecks.some(check => /success/i.test(check.conclusion || check.state || ''))
+        && (!info.headRefName || Date.now() - headSeenAt >= (this.config.checksStartGraceMs ?? 30_000))) return checks.length;
+      if (!requiredChecks.length && !triggered && required === 'web' && info.headRefName && Date.now() - headSeenAt >= (this.config.checksStartGraceMs ?? 30_000)) {
         await this.triggerWebCheck(info.headRefName);
         triggered = true;
       }
