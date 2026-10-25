@@ -6,7 +6,7 @@ import { SnowflakeUtil } from 'discord.js';
 const roleName = id => roles.find(role => role.id === id)?.name || id;
 const asList = value => Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 const trim = (value, length = 1500) => String(value || '').slice(0, length);
-const statusEmoji = { question:'❓', decision:'❓', ready:'📝', queued:'⏳', coding:'🛠️', retry_scheduled:'🔄', release_retry:'🔄', pr_ready:'🧪', integrating:'🔀', merged:'✅', existing:'✅', grouped:'🔗', failed:'⚠️', needs_instruction:'🙋' };
+const statusEvents = new Set(['intake_started','question','decision','decision_answer','ready','queued','coding','retry_scheduled','release_retry','pr_ready','integrating','merged','existing','grouped','failed','needs_instruction']);
 
 export class Engine {
   constructor(config, store, ai, git, discord, onChange = () => {}) {
@@ -24,10 +24,19 @@ export class Engine {
   event(id, actor, kind, text) {
     this.store.event(id, roleName(actor), kind, text);
     this.onChange();
-    if (id && statusEmoji[kind] && this.discord.setThreadStatus) {
+    if (id && statusEvents.has(kind) && this.discord.setThreadStatus) {
+      this.store.setKv(`thread-status-dirty:${id}`,'1');
+      this.queueThreadStatus(id);
+    }
+  }
+  queueThreadStatus(id) {
+    if (this.discord.setThreadStatus) {
       const previous = this.threadStatusUpdates.get(id) || Promise.resolve();
-      const update = previous.then(() => this.discord.setThreadStatus(id,statusEmoji[kind]))
-        .catch(error => console.error('Could not update Discord thread status:',error))
+      const update = previous.then(() => this.discord.setThreadStatus(id))
+        .catch(error => {
+          this.store.setKv(`thread-status-retry-after:${id}`,Date.now() + 30_000);
+          console.error('Could not update Discord thread status:',error);
+        })
         .finally(() => { if (this.threadStatusUpdates.get(id) === update) this.threadStatusUpdates.delete(id); });
       this.threadStatusUpdates.set(id,update);
     }
@@ -59,6 +68,10 @@ export class Engine {
     this.discord.onDecision = (id, text, author) => this.decision(id, text, author);
     if (!this.config.discordToken) return;
     await this.discord.start();
+    if (this.store.getKv('thread-status-label-version') !== '1') {
+      for (const ticket of this.store.list()) this.store.setKv(`thread-status-dirty:${ticket.id}`,'1');
+      this.store.setKv('thread-status-label-version','1');
+    }
     for (const ticket of this.store.list().filter(row => row.status === 'intake')) queueMicrotask(() => this.receive(ticket.id));
     for (const ticket of this.store.list().filter(row => ['merged','resolved_existing'].includes(row.status))) {
       const completed = this.store.latestEvent(ticket.id,ticket.status === 'merged' ? 'merged' : 'existing');
@@ -81,6 +94,8 @@ export class Engine {
       if (!ticket || !['intake','waiting_info','decision'].includes(ticket.status)) return;
       if (ticket.status === 'decision' && ticket.decision_thread_id) return;
       intakeRole = await this.acquireRole('聞き取り',id);
+      this.store.update(id,{status:'intake'});
+      this.event(id,intakeRole.id,'intake_started','聞き取りを開始');
       const baseSha = ticket.base_sha || await this.git.baseHead();
       if (!ticket.base_sha) this.store.update(id, { base_sha:baseSha });
       const history = await this.discord.history(id);
@@ -246,6 +261,10 @@ export class Engine {
     finally { this.active.delete(id); }
   }
   async tick() {
+    for (const ticket of this.store.list().filter(row => this.store.getKv(`thread-status-dirty:${row.id}`) === '1'
+      && Date.now() >= Number(this.store.getKv(`thread-status-retry-after:${row.id}`) || 0)).slice(0,5)) {
+      if (!this.threadStatusUpdates.has(ticket.id)) this.queueThreadStatus(ticket.id);
+    }
     const failed = this.store.list().reverse().find(row => row.status === 'failed' && !this.active.has(row.id)
       && Number(this.store.getKv(`failed-review-count:${row.id}`) || 0) < 3
       && Date.now() >= Number(this.store.getKv(`failed-review-after:${row.id}`) || 0));

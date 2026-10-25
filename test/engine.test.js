@@ -22,17 +22,22 @@ test('Discord thread status updates stay in event order', async () => {
   try {
     const started = [];
     let finishFirst;
-    f.engine.discord.setThreadStatus = async (_id,emoji) => {
-      started.push(emoji);
-      if (emoji === '🔀') await new Promise(resolve => { finishFirst = resolve; });
+    f.store.create('ticket','修正');
+    f.engine.discord.setThreadStatus = async id => {
+      const status = f.store.get(id).status;
+      started.push(status);
+      if (status === 'integrating') await new Promise(resolve => { finishFirst = resolve; });
     };
+    f.store.update('ticket',{status:'integrating'});
     f.engine.event('ticket','release','integrating','統合中');
+    await new Promise(resolve => setImmediate(resolve));
+    f.store.update('ticket',{status:'merged'});
     f.engine.event('ticket','release','merged','マージ済み');
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(started,['🔀']);
+    assert.deepEqual(started,['integrating']);
     finishFirst();
     await f.engine.threadStatusUpdates.get('ticket');
-    assert.deepEqual(started,['🔀','✅']);
+    assert.deepEqual(started,['integrating','merged']);
   } finally { f.close(); }
 });
 

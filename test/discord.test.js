@@ -93,7 +93,15 @@ test('instruction questions mention the starter and thread names show status emo
   const dir = mkdtempSync(join(tmpdir(),'tonarium-discord-'));
   const store = new Store(join(dir,'state.sqlite'));
   try {
-    const transport = new DiscordTransport({discordToken:'set'},store);
+    const names = [];
+    const fetcher = async (_url,options) => {
+      if (options.method === 'PATCH') {
+        names.push(JSON.parse(options.body).name);
+        return {ok:true,status:200};
+      }
+      return {ok:true,json:async () => ({name:'⏳ 二段ジャンプ'})};
+    };
+    const transport = new DiscordTransport({discordToken:'set'},store,null,fetcher);
     transport.client.user = {id:'bot-1'};
     const sent = [];
     const thread = {
@@ -103,10 +111,13 @@ test('instruction questions mention the starter and thread names show status emo
       setName:async name => { thread.name = name; }
     };
     transport.client.channels.fetch = async () => thread;
+    store.create('thread-1','二段ジャンプ');
+    store.update('thread-1',{status:'waiting_info'});
+    store.setKv('awaiting-instruction:thread-1','1');
     const ownerId = await transport.threadOwnerId('thread-1');
     await transport.say('thread-1','次の指示をください',{mentionUserId:ownerId});
-    await transport.setThreadStatus('thread-1','🙋');
-    assert.equal(thread.name,'🙋 二段ジャンプ');
+    await transport.setThreadStatus('thread-1');
+    assert.deepEqual(names,['🙋 指示待ち｜二段ジャンプ']);
     assert.match(sent[0].content,/^<@12345678901234567>/);
     assert.deepEqual(sent[0].allowedMentions,{users:['12345678901234567']});
     transport.client.destroy();

@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, ChannelType, escapeMarkdown } from 'discord.
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { syncThreadStatus } from './thread-status.js';
 
 function chunk(text, limit = 1900) {
   const result = [];
@@ -167,14 +168,8 @@ export class DiscordTransport {
     if (starter?.author && !starter.author.bot) return starter.author.id;
     return thread?.ownerId && thread.ownerId !== this.client.user?.id ? thread.ownerId : null;
   }
-  async setThreadStatus(threadId,emoji) {
-    const thread = await this.client.channels.fetch(threadId);
-    if (!thread?.isThread?.()) return;
-    const prefixes = ['❓','📝','⏳','🛠️','🔄','🧪','🔀','✅','🔗','⚠️','🙋'];
-    const previous = prefixes.find(prefix => thread.name.startsWith(`${prefix} `));
-    const title = previous ? thread.name.slice(previous.length + 1) : thread.name;
-    const next = `${emoji} ${title}`.slice(0,100);
-    if (thread.name !== next) await thread.setName(next);
+  async setThreadStatus(threadId) {
+    return syncThreadStatus(this.config,this.store,threadId,this.fetcher);
   }
   async url(threadId) {
     const thread = await this.client.channels.fetch(threadId);
