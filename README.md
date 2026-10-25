@@ -65,13 +65,15 @@ OpenAI API 翻訳は [Responses API の Structured Outputs](https://developers.o
 
 ## ダッシュボードと常駐
 
-既定のダッシュボード URL は `http://127.0.0.1:43879` です。担当者、案件の段階、最近の動き、PR マージ履歴をライブ更新します。要約には Discord の声が含まれるため、外部公開する場合は認証付きのプロキシを置いてください。
+ダッシュボードはローカルの `http://127.0.0.1:43879` と公開 URL `https://tonarium-agent.kokopi.me` で見られます。担当者、案件の段階、最近の動き、PR マージ履歴をライブ更新します。公開 URL はこの PC からの SSH 逆トンネルを使用します。PC、Bot、トンネルのどれかが停止すると公開も停止します。画面には Discord の案件名・要約・活動内容が表示されます。
 
 Windows ログオン時の起動タスクは `.env` を設定した後に登録できます。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install-startup-task.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\install-public-tunnel-task.ps1
 Start-ScheduledTask -TaskName TonariumAgent
+Start-ScheduledTask -TaskName TonariumAgentTunnel
 ```
 
 `.data/state.sqlite` に案件、受信時の `main` commit、出荷履歴を保存します。`.worktrees/` は一時的な作業コピーです。これらと `.env` は Git に含めません。
