@@ -68,6 +68,8 @@ npm start
 
 独立した出荷タスクが15秒ごとに出荷待ちの PR を確認します。すでに出荷待ちの PR を手動で即時処理する場合は `npm run release:ready` を実行できます。出荷担当が最新 `main` への統合、ローカルテスト、GitHub チェック、PR マージを順番に行います。
 
+一時的な GitHub push 失敗は同じコミットを再送します。それでも失敗した場合や実装テストで失敗した場合は、PM がエラーと作業ツリーを確認し、回数制限付きで再作業を指示します。再試行時は前回の差分を保持し、push だけ失敗した案件では実装エージェントを再実行しません。Tonarium 本体の Web checks はすべての PR に `shared/changelog.ts` の新規項目を要求します。出荷時に漏れを見つけた場合は統合担当が追記してからチェックを再実行します。
+
 Bot には対象チャンネルで **View Channel、Read Message History、Create Public Threads、Send Messages in Threads** を与えてください。判断用フォーラムを使う場合は投稿権限も必要です。Message Content Intent の詳細は [Discord の公式資料](https://github.com/discord/discord-api-docs/blob/main/developers/events/gateway.mdx) を参照してください。
 
 Codex の `gpt-6.1-sol` と Fast モードは [OpenAI Docs のモデル情報](https://learn.chatgpt.com/docs/models#gpt-61-sol) と [速度設定](https://learn.chatgpt.com/docs/agent-configuration/speed#fast-mode) に従っています。Fast はサブスクの利用枠を通常の 2.5 倍消費します。`CODEX_SPEED=standard` にすれば通常速度にできます。

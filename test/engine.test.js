@@ -102,6 +102,40 @@ test('release tests a PR against current main, waits for checks, then merges it'
   } finally { f.close(); }
 });
 
+test('release asks the integrator to repair a missing changelog entry before merging', async () => {
+  const f = fixture();
+  try {
+    f.store.create('ticket-1','メニューを変更');
+    f.store.update('ticket-1',{status:'pr_ready',branch:'agent/task-1',pr_number:12,summary:'変更履歴の位置を移動'});
+    f.engine.config = {baseBranch:'main',githubRepo:'owner/repo',batchMs:0,integrationProvider:'codex'};
+    const calls = [];
+    f.engine.ai = {
+      ask:async () => ({selectedIds:['ticket-1'],notes:''}),
+      code:async (_name,_prompt,_path,options) => { assert.equal(options.provider,'codex'); calls.push('repair'); return 'Added changelog entry'; }
+    };
+    let checked = 0, merged = false;
+    f.engine.git = {
+      prInfo:async () => ({state:'OPEN'}),
+      baseHead:async () => merged ? 'merge456' : 'base123',
+      git:async args => {
+        if (args[0] === 'status') return {stdout:' M shared/changelog.ts'};
+        calls.push(args[0]); return {stdout:''};
+      },
+      worktree:async () => ({path:'candidate'}),
+      mergeMainInto:async () => {},
+      changelogCheck:async () => ++checked === 1 ? 'missing' : 'ok',
+      test:async () => calls.push('test'),
+      pushBranch:async () => 'head123',
+      waitForChecks:async () => 1,
+      mergePr:async () => { merged = true; return 'merge456'; },
+      removeWorktree:async () => {}
+    };
+    assert.equal(await f.engine.release(true),true);
+    assert.deepEqual(calls.filter(x => ['repair','add','commit','test'].includes(x)),['repair','add','commit','test']);
+    assert.equal(f.store.get('ticket-1').status,'merged');
+  } finally { f.close(); }
+});
+
 test('release retries when main advances while PR checks run', async () => {
   const f = fixture();
   try {

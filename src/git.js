@@ -1,4 +1,5 @@
 import { mkdir, readdir, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { command } from './command.js';
 
@@ -46,6 +47,8 @@ export class GitHub {
     await rm(path, { recursive: true, force: true }).catch(() => {});
   }
   async test(path) {
+    const base = (await this.git(['rev-parse',`origin/${this.config.baseBranch || 'main'}`],path)).stdout;
+    if (await this.changelogCheck(path,base) === 'missing') throw new Error('Every PR must add a new dated entry to shared/changelog.ts');
     await command('npm', ['ci'], { cwd: path, timeoutMs: 15 * 60_000 });
     await command('npm', ['run','typecheck'], { cwd: path, timeoutMs: 15 * 60_000 });
     await command('npm', ['run','build'], { cwd: path, timeoutMs: 20 * 60_000 });
@@ -94,6 +97,17 @@ export class GitHub {
   async pushBranch(path, branch) {
     await this.git(['push','origin',`HEAD:refs/heads/${branch}`],path);
     return (await this.git(['rev-parse','HEAD'],path)).stdout;
+  }
+  async changelogCheck(path,baseSha) {
+    const script = join(path,'.github','scripts','check-changelog.mjs');
+    if (!existsSync(script)) return 'unavailable';
+    try {
+      await command(process.execPath,[script,baseSha],{cwd:path,timeoutMs:30_000});
+      return 'ok';
+    } catch (error) {
+      if (error.message.includes('Every PR must add a new dated entry')) return 'missing';
+      throw error;
+    }
   }
   async prInfo(number) {
     const result = await this.gh(['pr','view',String(number),'--repo',this.config.githubRepo,'--json','state,headRefOid,baseRefName,statusCheckRollup,mergeCommit']);

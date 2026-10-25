@@ -327,10 +327,20 @@ export class Engine {
             const conflicts = (await this.git.git(['diff','--name-only','--diff-filter=U'],worktree.path)).stdout;
             if (!conflicts) throw mergeError;
             this.event(ticket.id,'integrator','conflict',`競合解決中: ${trim(conflicts, 300)}`);
-            const report = await this.ai.code(roleName('integrator'), `現在 Git merge 中の競合を解決してください。競合マーカーを除去し、両方の変更を満たしてください。git add/commit/push は行わないでください。対象: ${ticket.title}。`, worktree.path, { provider: this.config.integrationProvider });
+            const report = await this.ai.code(roleName('integrator'), `現在 Git merge 中の競合を解決してください。競合マーカーを除去し、両方の変更を満たしてください。git add/commit/push は行わないでください。対象: ${ticket.title}。`, worktree.path, { provider: this.config.integrationProvider, requireChangelog:false });
             await this.git.git(['add','-A'],worktree.path);
             await this.git.git(['commit','--no-edit'],worktree.path);
             this.event(ticket.id,'integrator','resolved',trim(report,300));
+          }
+          if (await this.git.changelogCheck?.(worktree.path,integratedMain) === 'missing') {
+            this.event(ticket.id,'pm','changelog_missing','変更履歴がないため統合担当へ追記を指示');
+            const report = await this.ai.code(roleName('integrator'), `この PR の変更だけを確認し、shared/changelog.ts の先頭に新しい日付・見出し・本文の項目を1件追加してください。変更対象は shared/changelog.ts だけです。案件: ${ticket.title}。概要: ${ticket.summary}`, worktree.path, {provider:this.config.integrationProvider,timeoutMs:5*60_000});
+            const dirty = (await this.git.git(['status','--porcelain'],worktree.path)).stdout.split('\n').filter(Boolean);
+            if (!dirty.length || dirty.some(line => line.slice(3) !== 'shared/changelog.ts')) throw new Error('Changelog repair changed unexpected files or no files');
+            if (await this.git.changelogCheck(worktree.path,integratedMain) !== 'ok') throw new Error('Changelog repair did not add a valid entry');
+            await this.git.git(['add','shared/changelog.ts'],worktree.path);
+            await this.git.git(['commit','-m',`docs: record ${ticket.title}`.slice(0,100)],worktree.path);
+            this.event(ticket.id,'integrator','changelog_fixed',trim(report,300));
           }
           await this.git.test(worktree.path);
           const head = await this.git.pushBranch(worktree.path,ticket.branch);
