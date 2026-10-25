@@ -88,3 +88,27 @@ test('repair threads retain the original bug report for intake', async () => {
     transport.client.destroy();
   } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
 });
+
+test('instruction questions mention the starter and thread names show status emoji', async () => {
+  const dir = mkdtempSync(join(tmpdir(),'tonarium-discord-'));
+  const store = new Store(join(dir,'state.sqlite'));
+  try {
+    const transport = new DiscordTransport({discordToken:'set'},store);
+    transport.client.user = {id:'bot-1'};
+    const sent = [];
+    const thread = {
+      name:'⏳ 二段ジャンプ',ownerId:'bot-1',isThread:() => true,
+      fetchStarterMessage:async () => ({author:{id:'12345678901234567',bot:false}}),
+      send:async payload => sent.push(payload),
+      setName:async name => { thread.name = name; }
+    };
+    transport.client.channels.fetch = async () => thread;
+    const ownerId = await transport.threadOwnerId('thread-1');
+    await transport.say('thread-1','次の指示をください',{mentionUserId:ownerId});
+    await transport.setThreadStatus('thread-1','🙋');
+    assert.equal(thread.name,'🙋 二段ジャンプ');
+    assert.match(sent[0].content,/^<@12345678901234567>/);
+    assert.deepEqual(sent[0].allowedMentions,{users:['12345678901234567']});
+    transport.client.destroy();
+  } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
+});

@@ -43,6 +43,14 @@ const git = new GitHub(config,root);
 const translator = new Translator(config,ai,root);
 const rest = new REST({version:'10'}).setToken(config.discordToken);
 const discord = {
+  async setThreadStatus(id,emoji) {
+    const thread = await rest.get(Routes.channel(id));
+    const prefixes = ['❓','📝','⏳','🛠️','🔄','🧪','🔀','✅','🔗','⚠️','🙋'];
+    const previous = prefixes.find(prefix => thread.name?.startsWith(`${prefix} `));
+    const title = previous ? thread.name.slice(previous.length + 1) : thread.name;
+    const next = `${emoji} ${title}`.slice(0,100);
+    if (thread.name !== next) await rest.patch(Routes.channel(id),{body:{name:next}});
+  },
   async say(id, text) {
     let message = text;
     try {

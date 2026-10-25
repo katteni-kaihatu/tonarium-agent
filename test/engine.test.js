@@ -10,7 +10,7 @@ function fixture() {
   const dir = mkdtempSync(join(tmpdir(),'tonarium-engine-'));
   const store = new Store(join(dir,'state.sqlite'));
   const sent = [];
-  const discord = { say: async (id,text) => sent.push({id,text}), decision: async () => 'forum-1', history: async () => '投稿内容' };
+  const discord = { say: async (id,text,options) => sent.push({id,text,options}), decision: async () => 'forum-1', history: async () => '投稿内容' };
   const config = { maxWorkers:0, autoRelease:false, repo:dir, baseBranch:'main', githubRepo:'owner/repo' };
   const git = { baseHead:async () => 'base-123', snapshotWorktree:async () => ({path:dir}), removeWorktree:async () => {} };
   const engine = new Engine(config,store,null,git,discord);
@@ -272,6 +272,32 @@ test('PM reviews a stopped ticket and requeues its saved worktree', async () => 
     assert.equal(f.store.getKv('retry-instruction:stopped'),'既存の履歴を保持して再検証する');
     assert.equal(f.store.getKv('failed-review-count:stopped'),'1');
     assert.ok(f.store.events().some(event => event.kind === 'retry_scheduled'));
+  } finally { f.close(); }
+});
+
+test('the second implementation failure asks the thread owner for instructions', async () => {
+  const f = fixture();
+  try {
+    f.store.create('stopped','二段ジャンプ');
+    f.store.update('stopped',{status:'queued',issue_number:162,branch:'agent/stopped'});
+    f.engine.git.prepare = async () => {};
+    f.engine.git.resumeTaskWorktree = async () => ({path:f.dir,branch:'agent/stopped',resumed:true});
+    f.engine.ai = {
+      code:async () => { throw new Error('changelog check failed'); },
+      ask:async () => ({question:'既存履歴を復元して続けますか？'})
+    };
+    let automaticRetries = 0;
+    f.engine.pmRetry = async id => { automaticRetries++; f.store.update(id,{status:'queued'}); return true; };
+    f.engine.discord.threadOwnerId = async () => '12345678901234567';
+    const worker = {id:'builder1',name:'そら'};
+    await f.engine.implement('stopped',worker);
+    assert.equal(automaticRetries,1);
+    assert.equal(f.store.getKv('failure-count:stopped'),'1');
+    await f.engine.implement('stopped',worker);
+    assert.equal(automaticRetries,1);
+    assert.equal(f.store.get('stopped').status,'waiting_info');
+    assert.equal(f.store.getKv('failure-count:stopped'),'2');
+    assert.equal(f.sent.at(-1).options.mentionUserId,'12345678901234567');
   } finally { f.close(); }
 });
 

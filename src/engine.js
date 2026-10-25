@@ -6,6 +6,7 @@ import { SnowflakeUtil } from 'discord.js';
 const roleName = id => roles.find(role => role.id === id)?.name || id;
 const asList = value => Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 const trim = (value, length = 1500) => String(value || '').slice(0, length);
+const statusEmoji = { question:'❓', decision:'❓', ready:'📝', queued:'⏳', coding:'🛠️', retry_scheduled:'🔄', release_retry:'🔄', pr_ready:'🧪', integrating:'🔀', merged:'✅', existing:'✅', grouped:'🔗', failed:'⚠️', needs_instruction:'🙋' };
 
 export class Engine {
   constructor(config, store, ai, git, discord, onChange = () => {}) {
@@ -22,6 +23,7 @@ export class Engine {
   event(id, actor, kind, text) {
     this.store.event(id, roleName(actor), kind, text);
     this.onChange();
+    if (id && statusEmoji[kind]) this.discord.setThreadStatus?.(id,statusEmoji[kind]).catch(error => console.error('Could not update Discord thread status:',error));
   }
   async acquireRole(job, ticketId) {
     const candidates = roles.filter(role => role.job === job);
@@ -111,6 +113,13 @@ export class Engine {
         return;
       }
       this.store.update(id, { status: 'planning' });
+      if (ticket.status === 'waiting_info' && this.store.getKv(`awaiting-instruction:${id}`) === '1') {
+        this.store.setKv(`awaiting-instruction:${id}`,'0');
+        this.store.setKv(`failure-count:${id}`,0);
+        this.store.setKv(`retry-count:${id}:code`,0);
+        this.store.setKv(`retry-count:${id}:publish`,0);
+        this.store.setKv(`failed-review-count:${id}`,0);
+      }
       this.event(id, intakeRole.id, 'ready', '実装に必要な情報が揃いました');
       phase = 'planning';
       await this.plan(id, history);
@@ -293,6 +302,13 @@ export class Engine {
       await this.discord.say(id, `**${worker.name}｜実装**\n変更とテストが完了しました。PR #${pr} を出荷待ちに入れました。`).catch(error => this.event(id,worker.id,'discord_warning',trim(error.message,300)));
     } catch (error) {
       const retryStage = stage === 'publish' && /^git (?:add|commit|status)\b/.test(error.message) ? 'code' : stage;
+      const priorFailures = Math.max(Number(this.store.getKv(`failure-count:${id}`) || 0),Number(this.store.getKv(`retry-count:${id}:code`) || 0),Number(this.store.getKv(`retry-count:${id}:publish`) || 0));
+      const failures = priorFailures + 1;
+      this.store.setKv(`failure-count:${id}`,failures);
+      if (failures >= 2) {
+        await this.askUserAfterFailures(id,error);
+        return;
+      }
       let scheduled = false;
       if (worktree) {
         try { scheduled = await this.pmRetry(id,error,retryStage,worktree); }
@@ -326,6 +342,11 @@ export class Engine {
   async reviewFailed(id) {
     const ticket = this.store.get(id);
     if (!ticket || ticket.status !== 'failed') return;
+    const failures = Math.max(Number(this.store.getKv(`failure-count:${id}`) || 0),Number(this.store.getKv(`retry-count:${id}:code`) || 0),Number(this.store.getKv(`retry-count:${id}:publish`) || 0));
+    if (failures >= 2) {
+      await this.askUserAfterFailures(id,new Error(ticket.error || '実装に失敗しました'));
+      return;
+    }
     const countKey = `failed-review-count:${id}`;
     const count = Number(this.store.getKv(countKey) || 0) + 1;
     this.store.setKv(countKey,count);
@@ -351,6 +372,26 @@ export class Engine {
     } finally {
       if (role) this.releaseRole(role);
     }
+  }
+  async askUserAfterFailures(id,error) {
+    const message = trim(error?.message || error,2000);
+    this.store.setKv(`awaiting-instruction:${id}`,'1');
+    this.store.setKv(`failed-review-count:${id}`,3);
+    let role, question = '同じ案件で2回失敗しました。作業ツリーは保存しています。続けるために、次に試す修正方針か、いったん保留にするかを指示してください。';
+    try {
+      role = await this.acquireRole('PM',id);
+      const worktree = await this.git.resumeTaskWorktree(id).catch(() => null);
+      const result = await this.ai.ask(role.name, `同じ案件が2回失敗しました。自動再試行は止めます。残っている作業ツリーと失敗内容を調べ、ユーザーが次の方針を指示できる具体的な質問を一つ作ってください。技術的な原因は短く説明し、実装の詳細が分からない人にも選べる案を添えます。返す JSON: {"question":"ユーザーへの質問"}。\n\n案件: ${this.store.get(id)?.title}\n失敗: ${message}`, {provider:this.config.intakeProvider || 'codex',cwd:worktree?.path || this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
+      question = trim(result.question || question,1000);
+    } catch (reviewError) {
+      this.event(id,role?.id || 'pm','retry_review_warning',trim(reviewError.message,500));
+    } finally {
+      if (role) this.releaseRole(role);
+    }
+    this.store.update(id,{status:'waiting_info',worker:null,error:message});
+    this.event(id,'pm','needs_instruction',question);
+    const ownerId = await this.discord.threadOwnerId?.(id).catch(() => null);
+    await this.discord.say(id,`**${roleName('pm')}｜PM 🙋**\n${question}`,{mentionUserId:ownerId}).catch(error => this.event(id,'pm','discord_warning',trim(error.message,300)));
   }
   async release(force = false) {
     if (this.releasing) return false;
@@ -380,6 +421,7 @@ export class Engine {
             continue;
           }
           this.store.update(ticket.id, { status: 'integrating' });
+          this.event(ticket.id,'integrator','integrating',`PR #${ticket.pr_number} を最新 main と統合中`);
           const integratedMain = await this.git.baseHead();
           await this.git.git(['fetch','origin',ticket.branch]);
           worktree = await this.git.worktree(`release-${releaseId}-${ticket.id}-${Date.now()}`,`origin/${ticket.branch}`);

@@ -135,10 +135,10 @@ export class DiscordTransport {
     await thread.send({content:`🛠️ 修正依頼の引き継ぎ\n元のフィードバック: ${originalUrl}\n元のPR: ${ticket.pr_number ? `#${ticket.pr_number}` : 'なし'}\n報告: ${report}`.slice(0,1900),allowedMentions:{parse:[]}});
     return {id:thread.id,url:`https://discord.com/channels/${thread.guildId}/${thread.id}`};
   }
-  async sendRaw(threadId, text) {
+  async sendRaw(threadId, text, mentionUserId = '') {
     if (!this.config.discordToken) return;
     const thread = await this.client.channels.fetch(threadId);
-    for (const part of chunk(text)) await thread.send({ content: part, allowedMentions: { parse: [] } });
+    for (const part of chunk(text)) await thread.send({ content: part, allowedMentions: mentionUserId && part.includes(`<@${mentionUserId}>`) ? { users: [mentionUserId] } : { parse: [] } });
   }
   async translateUser(message, threadId) {
     if (!this.translator || !message.content?.trim() || this.translatedMessageIds.has(message.id)) return;
@@ -150,15 +150,31 @@ export class DiscordTransport {
       await this.sendRaw(threadId, `🌐 **${name} の発言 / message / 메시지**\n🇯🇵 ${result.ja}\n🇺🇸 ${result.en}\n🇰🇷 ${result.ko}`);
     } catch (error) { console.error('translation of user message', error); }
   }
-  async say(threadId, text) {
-    if (!this.translator) return this.sendRaw(threadId,text);
+  async say(threadId, text, { mentionUserId = '' } = {}) {
+    const mention = /^\d{17,20}$/.test(mentionUserId) ? `<@${mentionUserId}> ` : '';
+    if (!this.translator) return this.sendRaw(threadId,mention + text,mentionUserId);
     try {
       const result = await this.translator.translate(text);
-      return this.sendRaw(threadId, `${text}\n\n🌐 **翻訳 / Translations / 번역**\n🇯🇵 ${result.ja}\n🇺🇸 ${result.en}\n🇰🇷 ${result.ko}`);
+      return this.sendRaw(threadId, `${mention}${text}\n\n🌐 **翻訳 / Translations / 번역**\n🇯🇵 ${result.ja}\n🇺🇸 ${result.en}\n🇰🇷 ${result.ko}`,mentionUserId);
     } catch (error) {
       console.error('translation of bot message', error);
-      return this.sendRaw(threadId,text);
+      return this.sendRaw(threadId,mention + text,mentionUserId);
     }
+  }
+  async threadOwnerId(threadId) {
+    const thread = await this.client.channels.fetch(threadId);
+    const starter = await thread?.fetchStarterMessage?.().catch(() => null);
+    if (starter?.author && !starter.author.bot) return starter.author.id;
+    return thread?.ownerId && thread.ownerId !== this.client.user?.id ? thread.ownerId : null;
+  }
+  async setThreadStatus(threadId,emoji) {
+    const thread = await this.client.channels.fetch(threadId);
+    if (!thread?.isThread?.()) return;
+    const prefixes = ['❓','📝','⏳','🛠️','🔄','🧪','🔀','✅','🔗','⚠️','🙋'];
+    const previous = prefixes.find(prefix => thread.name.startsWith(`${prefix} `));
+    const title = previous ? thread.name.slice(previous.length + 1) : thread.name;
+    const next = `${emoji} ${title}`.slice(0,100);
+    if (thread.name !== next) await thread.setName(next);
   }
   async url(threadId) {
     const thread = await this.client.channels.fetch(threadId);
