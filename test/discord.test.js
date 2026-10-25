@@ -65,3 +65,26 @@ test('Discord PNG attachments are downloaded for the intake vision input and cle
     transport.client.destroy();
   } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
 });
+
+test('repair threads retain the original bug report for intake', async () => {
+  const dir = mkdtempSync(join(tmpdir(),'tonarium-discord-'));
+  const store = new Store(join(dir,'state.sqlite'));
+  try {
+    const transport = new DiscordTransport({discordChannelId:'feedback'},store);
+    transport.client.user = {id:'bot-1'};
+    const sent = [];
+    const thread = {
+      id:'repair-1',guildId:'guild-1',isThread:() => true,
+      send:async payload => sent.push(payload.content),
+      messages:{fetch:async () => new Map([['seed',{author:{id:'bot-1',bot:true,username:'bot'},content:sent[0],attachments:new Map(),createdTimestamp:1}]])},
+      fetchStarterMessage:async () => null
+    };
+    transport.client.channels.fetch = async id => id === 'feedback'
+      ? {threads:{create:async () => thread}} : thread;
+    const result = await transport.createFollowUp({id:'original-1',title:'サムネイル',pr_number:94},'利用者: 更新されない','更新停止');
+    assert.equal(result.id,'repair-1');
+    assert.match(await transport.history('repair-1'),/更新されない/);
+    assert.match(sent[0],/#94/);
+    transport.client.destroy();
+  } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
+});

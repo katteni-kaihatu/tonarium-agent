@@ -66,7 +66,7 @@ export class Engine {
   async feedback(id) {
     if (this.active.has(id)) { this.pendingFeedback.add(id); return; }
     this.active.add(id);
-    let snapshot, intakeRole, imageBundle, phase = 'intake';
+    let snapshot, intakeRole, imageBundle, parentImageBundle, phase = 'intake';
     try {
       const ticket = this.store.get(id);
       if (!ticket || !['intake','waiting_info','decision'].includes(ticket.status)) return;
@@ -79,9 +79,13 @@ export class Engine {
       snapshot = await this.git.snapshotWorktree(`intake-${id}-${Date.now()}`,baseSha);
       try { imageBundle = await this.discord.downloadImages?.(id); }
       catch (error) { this.event(id,intakeRole.id,'image_warning',trim(error.message,300)); }
+      if (ticket.parent_ticket_id) {
+        try { parentImageBundle = await this.discord.downloadImages?.(ticket.parent_ticket_id); }
+        catch (error) { this.event(id,intakeRole.id,'image_warning',trim(error.message,300)); }
+      }
       const similar = this.store.list().filter(row => row.id !== id && !['grouped','failed','merged','resolved_existing'].includes(row.status)).slice(0,50)
         .map(row => ({ id:row.id,title:row.title,summary:row.summary,status:row.status }));
-      const result = await this.ai.ask(intakeRole.name, `Discord のフィードバックを聞き取る担当です。この作業コピーは発言時の ${this.config.baseBranch || 'main'} (${baseSha}) です。まず既存案件の似た声を探し、このリポジトリのコードと docs を読み、すでに実装済みの機能か調べてください。似た案件があれば duplicateOf にその正確な ID を入れます。既存機能で解決できるなら alreadyExists=true、evidencePath に確認したリポジトリ相対ファイルパスを入れ、使い方を reply で伝えます。機能が存在しても報告が不具合なら完了扱いにしません。断定できない場合は質問します。返す JSON: {"ready": boolean, "reply": "ユーザーへの自然な日本語の短い返信または質問", "title": "短い件名", "summary": "要約", "criteria": ["受け入れ条件"], "duplicateOf": "既存案件IDまたは空文字", "alreadyExists": boolean, "evidencePath": "リポジトリ相対パスまたは空文字"}。既出内容を繰り返して質問しないでください。\n\nスレッド名: ${ticket.title}\n${history}\n\n既存案件: ${JSON.stringify(similar)}`, { provider: this.config.intakeProvider, cwd: snapshot.path, repoReadOnly: true, images: imageBundle?.paths || [] });
+      const result = await this.ai.ask(intakeRole.name, `Discord のフィードバックを聞き取る担当です。この作業コピーは発言時の ${this.config.baseBranch || 'main'} (${baseSha}) です。まず既存案件の似た声を探し、このリポジトリのコードと docs を読み、すでに実装済みの機能か調べてください。似た案件があれば duplicateOf にその正確な ID を入れます。既存機能で解決できるなら alreadyExists=true、evidencePath に確認したリポジトリ相対ファイルパスを入れ、使い方を reply で伝えます。機能が存在しても報告が不具合なら完了扱いにしません。元案件への追加のバグ報告なら、その不具合を新しい修正案件として扱ってください。断定できない場合は質問します。返す JSON: {"ready": boolean, "reply": "ユーザーへの自然な日本語の短い返信または質問", "title": "短い件名", "summary": "要約", "criteria": ["受け入れ条件"], "duplicateOf": "既存案件IDまたは空文字", "alreadyExists": boolean, "evidencePath": "リポジトリ相対パスまたは空文字"}。既出内容を繰り返して質問しないでください。\n\nスレッド名: ${ticket.title}\n元案件: ${ticket.parent_ticket_id || 'なし'}\n${history}\n\n既存案件: ${JSON.stringify(similar)}`, { provider: this.config.intakeProvider, cwd: snapshot.path, repoReadOnly: true, images: [...(imageBundle?.paths || []),...(parentImageBundle?.paths || [])] });
       const update = { title: trim(result.title || ticket.title, 100), summary: trim(result.summary, 3000), criteria: JSON.stringify(asList(result.criteria)) };
       this.store.update(id, update);
       const duplicate = similar.find(row => row.id === String(result.duplicateOf));
@@ -113,6 +117,7 @@ export class Engine {
     } catch (error) { await this.fail(id, phase === 'planning' ? 'pm' : intakeRole?.id || 'intake', error); }
     finally {
       if (imageBundle) await imageBundle.cleanup().catch(error => console.error('Could not clean up feedback images:',error));
+      if (parentImageBundle) await parentImageBundle.cleanup().catch(error => console.error('Could not clean up parent feedback images:',error));
       if (snapshot) await this.git.removeWorktree(snapshot.path);
       if (intakeRole) this.releaseRole(intakeRole);
       this.active.delete(id);
@@ -136,7 +141,25 @@ export class Engine {
       const mainSha = await this.git.baseHead();
       snapshot = await this.git.snapshotWorktree(`support-${id}-${Date.now()}`,mainSha);
       const pr = ticket.pr_number ? await this.git.prDetails(ticket.pr_number).catch(() => null) : null;
-      const result = await this.ai.ask(supportRole.name, `完了済みの Discord スレッドで、ユーザーが実装について質問しました。作業コピーの現在の main と関連 docs を読み、PR 情報も参考にして、実装の仕組みと数値・間隔を正確に説明してください。推測で断定せず、確認できたソースのパスを回答に含めてください。コード変更や新しいタスク化は不要です。最新の質問と、同時に送られた続きの発言をまとめて答えてください。返す JSON: {"answer":"日本語での分かりやすい回答"}。\n\n案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,pr:ticket.pr_number})}\nPR情報: ${JSON.stringify(pr)}\n最新の質問: ${JSON.stringify(question)}\n会話の文脈: ${history}`, {cwd:snapshot.path,repoReadOnly:true});
+      const result = await this.ai.ask(supportRole.name, `完了済みの Discord スレッドへの新しい発言を判断してください。現在の main と関連 docs、PR 情報を読みます。実装の質問なら action="answer" として確認できたソースのパスを含む正確な説明を返します。新しい不具合・回帰・修正依頼なら action="new_fix" とし、元案件とは別の修正案件にします。再現手順など必要な情報が足りないなら action="clarify" として元スレッドで短く質問します。既に質問済みの内容を繰り返し聞かないでください。コード変更は不要です。返す JSON: {"action":"answer|new_fix|clarify","answer":"回答または確認質問","title":"新規修正の短い件名","summary":"不具合と期待結果の要約"}。\n\n元案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,pr:ticket.pr_number})}\nPR情報: ${JSON.stringify(pr)}\n最新の発言: ${JSON.stringify(question)}\n会話の文脈: ${history}`, {cwd:snapshot.path,repoReadOnly:true});
+      if (result.action === 'new_fix') {
+        const key = `followup:${id}:${messageId}`;
+        let childId = this.store.getKv(key);
+        let childUrl = childId ? await this.discord.url(childId) : '';
+        if (!childId) {
+          const child = await this.discord.createFollowUp(ticket,question,trim(result.title || `${ticket.title}の不具合`,90));
+          childId = child.id;
+          childUrl = child.url;
+          this.store.setKv(key,childId);
+        }
+        this.store.create(childId,trim(result.title || `${ticket.title}の不具合`,100));
+        this.store.update(childId,{parent_ticket_id:id,summary:trim(result.summary || question,3000),base_sha:mainSha});
+        await this.discord.say(id, `**${supportRole.name}｜実装案内**\n新しい修正案件として受け付けました: ${childUrl}`);
+        this.store.update(id,{answered_message_id:messageId});
+        this.event(id,supportRole.id,'followup_created',`修正案件 ${childId} を作成`);
+        await this.receive(childId);
+        return;
+      }
       const answer = trim(result.answer,4000);
       if (!answer) throw new Error('Implementation answer was empty');
       await this.discord.say(id, `**${supportRole.name}｜実装案内**\n${answer}`);

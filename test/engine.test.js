@@ -233,6 +233,29 @@ test('completed threads answer implementation questions without reopening the ta
   } finally { f.close(); }
 });
 
+test('a bug report in a completed thread creates a linked repair ticket', async () => {
+  const f = fixture();
+  try {
+    f.store.create('thread-1','サムネイル');
+    f.store.update('thread-1',{status:'merged',pr_number:94,last_message_id:'bug-message',answered_message_id:'old-message'});
+    f.engine.discord.userMessage = async () => '利用者: サムネイルが更新されなくなった';
+    f.engine.discord.createFollowUp = async () => ({id:'repair-thread',url:'https://discord.com/channels/guild/repair-thread'});
+    f.engine.git.prDetails = async () => ({title:'サムネイル',files:['client/src/preview.ts']});
+    f.engine.ai = {ask:async () => ({action:'new_fix',title:'サムネイルの更新停止',summary:'更新が止まる不具合'})};
+    const started = [];
+    f.engine.feedback = async id => { started.push(id); };
+    await f.engine.receive('thread-1');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.store.get('thread-1').status,'merged');
+    assert.equal(f.store.get('thread-1').answered_message_id,'bug-message');
+    assert.equal(f.store.get('repair-thread').status,'intake');
+    assert.equal(f.store.get('repair-thread').parent_ticket_id,'thread-1');
+    assert.equal(f.store.get('repair-thread').base_sha,'base-123');
+    assert.deepEqual(started,['repair-thread']);
+    assert.match(f.sent[0].text,/repair-thread/);
+  } finally { f.close(); }
+});
+
 test('release attempts every ready PR even if the review omits one', async () => {
   const f = fixture();
   try {

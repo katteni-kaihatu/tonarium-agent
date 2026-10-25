@@ -86,7 +86,7 @@ export class DiscordTransport {
     const messages = await thread.messages.fetch({ limit: 100 });
     const starter = await thread.fetchStarterMessage().catch(() => null);
     if (starter) messages.set(starter.id,starter);
-    const history = [...messages.values()].filter(message => !message.author.bot).sort((a,b) => a.createdTimestamp - b.createdTimestamp)
+    const history = [...messages.values()].filter(message => !message.author.bot || (message.author.id === this.client.user?.id && message.content.startsWith('🛠️ 修正依頼の引き継ぎ'))).sort((a,b) => a.createdTimestamp - b.createdTimestamp)
       .map(message => `${message.author.username}: ${message.content || '[添付のみ]'}${message.attachments.size ? ` [添付: ${[...message.attachments.values()].map(x => x.url).join(', ')}]` : ''}`).join('\n').slice(-20_000);
     if (starter) this.seedMessages.delete(threadId);
     return history || this.seedMessages.get(threadId) || '';
@@ -124,7 +124,16 @@ export class DiscordTransport {
     const thread = await this.client.channels.fetch(threadId);
     const message = await thread.messages.fetch(messageId).catch(() => null) || await thread.fetchStarterMessage().catch(() => null);
     if (!message || message.id !== messageId || message.author.bot) return '';
-    return `${message.author.username}: ${message.content || '[添付のみ]'}`;
+    return `${message.author.username}: ${message.content || '[添付のみ]'}${message.attachments.size ? ` [添付: ${[...message.attachments.values()].map(attachment => attachment.url).join(', ')}]` : ''}`;
+  }
+  async createFollowUp(ticket, report, title) {
+    const channel = await this.client.channels.fetch(this.config.discordChannelId);
+    if (!channel?.threads) throw new Error('Feedback text channel is unavailable');
+    const thread = await channel.threads.create({name:`修正｜${title || ticket.title}`.slice(0,100),type:ChannelType.PublicThread,reason:`Follow-up to feedback ${ticket.id}`});
+    this.ownThreads.add(thread.id);
+    const originalUrl = `https://discord.com/channels/${thread.guildId}/${ticket.id}`;
+    await thread.send({content:`🛠️ 修正依頼の引き継ぎ\n元のフィードバック: ${originalUrl}\n元のPR: ${ticket.pr_number ? `#${ticket.pr_number}` : 'なし'}\n報告: ${report}`.slice(0,1900),allowedMentions:{parse:[]}});
+    return {id:thread.id,url:`https://discord.com/channels/${thread.guildId}/${thread.id}`};
   }
   async sendRaw(threadId, text) {
     if (!this.config.discordToken) return;
