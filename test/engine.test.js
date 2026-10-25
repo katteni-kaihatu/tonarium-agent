@@ -301,6 +301,25 @@ test('the second implementation failure asks the thread owner for instructions',
   } finally { f.close(); }
 });
 
+test('a user instruction resets the two-failure limit and resumes planning', async () => {
+  const f = fixture();
+  try {
+    f.store.create('stopped','二段ジャンプ');
+    f.store.update('stopped',{status:'waiting_info',last_message_id:'reply-1'});
+    f.store.setKv('awaiting-instruction:stopped','1');
+    f.store.setKv('failure-count:stopped',2);
+    f.store.setKv('retry-count:stopped:code',2);
+    f.engine.ai = {ask:async () => ({ready:true,title:'二段ジャンプ',summary:'ユーザーの指示に従って修正',criteria:['再検証する']})};
+    let planned = false;
+    f.engine.plan = async () => { planned = true; };
+    await f.engine.feedback('stopped');
+    assert.equal(planned,true);
+    assert.equal(f.store.getKv('awaiting-instruction:stopped'),'0');
+    assert.equal(f.store.getKv('failure-count:stopped'),'0');
+    assert.equal(f.store.getKv('retry-count:stopped:code'),'0');
+  } finally { f.close(); }
+});
+
 test('release attempts every ready PR even if the review omits one', async () => {
   const f = fixture();
   try {
