@@ -61,7 +61,7 @@ npm start
 
 名前は `TONARIUM_TEAM_NAMES` の JSON で変更できます。例: `{"pm":"花子","release":"太郎"}`。
 
-Coolify には **専用の Web nightly アプリ**を作り、Git リポジトリを `katteni-kaihatu/tonarium-prototype`、ブランチを `agent/web-nightly` に設定してください。既存の Dockerfile / Compose 構成を使います。Coolify 側の Git push 自動デプロイは無効にし、このエージェントの Webhook を公開トリガーにしてください。nightly ブランチは最初の実装時に `origin/main` から作成されます。既存の native / Electron nightly の GitHub Actions は触りません。
+Coolify には **専用の Web nightly アプリ**を作り、Git リポジトリを `katteni-kaihatu/tonarium-prototype`、ブランチを `agent/web-nightly` に設定してください。ブランチは `origin/main` から作成済みです。既存の Dockerfile / Compose 構成を使います。Coolify 側の Git push 自動デプロイは無効にし、このエージェントの Webhook を公開トリガーにしてください。既存の native / Electron nightly の GitHub Actions は触りません。
 
 Bot の参加先では、通常のテキストチャンネル内にスレッドを作ってフィードバックを書きます。スレッド本文が曖昧なら、ひよりが同じスレッドで聞き返します。フォーラムは開発タスクの一覧には使わず、製品判断が必要な時だけ使います。
 
