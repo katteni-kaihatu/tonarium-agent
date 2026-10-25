@@ -11,7 +11,7 @@ export class Store {
         id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
         summary TEXT NOT NULL DEFAULT '', criteria TEXT NOT NULL DEFAULT '[]',
         issue_number INTEGER, pr_number INTEGER, branch TEXT, worker TEXT,
-        last_message_id TEXT, parent_ticket_id TEXT, decision_thread_id TEXT,
+        last_message_id TEXT, parent_ticket_id TEXT, decision_thread_id TEXT, base_sha TEXT,
         error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS events (
@@ -24,6 +24,7 @@ export class Store {
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+    if (!this.db.prepare('PRAGMA table_info(tickets)').all().some(column => column.name === 'base_sha')) this.db.exec('ALTER TABLE tickets ADD COLUMN base_sha TEXT');
   }
   get(id) { return this.db.prepare('SELECT * FROM tickets WHERE id=?').get(id); }
   list() { return this.db.prepare('SELECT * FROM tickets ORDER BY updated_at DESC LIMIT 200').all(); }
@@ -33,7 +34,7 @@ export class Store {
     return this.get(id);
   }
   update(id, patch) {
-    const allowed = ['title','status','summary','criteria','issue_number','pr_number','branch','worker','last_message_id','parent_ticket_id','decision_thread_id','error'];
+    const allowed = ['title','status','summary','criteria','issue_number','pr_number','branch','worker','last_message_id','parent_ticket_id','decision_thread_id','base_sha','error'];
     const entries = Object.entries(patch).filter(([key]) => allowed.includes(key));
     if (!entries.length) return this.get(id);
     const sql = entries.map(([key]) => `${key}=?`).join(',');
@@ -60,7 +61,7 @@ export class Store {
     this.db.exec("UPDATE tickets SET status='intake',worker=NULL WHERE status='planning'");
     this.db.exec("UPDATE tickets SET status='queued',worker=NULL WHERE status='coding'");
     this.db.exec("UPDATE tickets SET status='pr_ready',worker=NULL WHERE status='integrating'");
-    this.db.exec("UPDATE releases SET status='interrupted',error='Process restarted during release' WHERE status IN ('integrating','deploying')");
+    this.db.exec("UPDATE releases SET status='interrupted',error='Process restarted during merge' WHERE status IN ('integrating','deploying','merging')");
   }
   close() { this.db.close(); }
 }

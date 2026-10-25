@@ -18,15 +18,15 @@
     </header>
     <main>
       <section class="hero">
-        <div class="hero-copy"><div class="eyebrow"><span class="eyebrow-line"></span> 夜の開発室 / NIGHT SHIFT</div><h1>届いた声が、<br><em>次の更新</em>になるまで。</h1><p>Discord の会話から聞き取り、実装、統合、Web nightly の公開まで。チームの今がここに集まります。</p><div class="hero-actions"><a id="nightly-link" class="primary-link disabled" href="#release-board" aria-disabled="true">NIGHTLY を開く <span>↗</span></a><span class="hero-note">フィードバック → 判断 → 実装 → 出荷</span></div></div>
+        <div class="hero-copy"><div class="eyebrow"><span class="eyebrow-line"></span> 夜の開発室 / NIGHT SHIFT</div><h1>届いた声が、<br><em>次の更新</em>になるまで。</h1><p>Discord の会話から聞き取り、実装、PR のチェックと main へのマージまで。チームの今がここに集まります。</p><div class="hero-actions"><a id="main-link" class="primary-link" href="#release-board">MAIN を開く <span>↗</span></a><span class="hero-note">フィードバック → 判断 → 実装 → マージ</span></div></div>
         <div class="hero-orbit" aria-hidden="true"><div class="orbit orbit-a"></div><div class="orbit orbit-b"></div><div class="orbit-center"><span>✦</span><strong>TONARIUM</strong><small>LISTEN · BUILD · SHIP</small></div><div class="orbit-point point-a"></div><div class="orbit-point point-b"></div><div class="orbit-point point-c"></div></div>
       </section>
-      <section class="stats" aria-label="現在の状況"><div><span>OPEN VOICES</span><strong id="stat-open">00</strong><small>対応中の声</small></div><div><span>IN PROGRESS</span><strong id="stat-progress">00</strong><small>進行中の案件</small></div><div><span>READY TO SHIP</span><strong id="stat-ready">00</strong><small>出荷待ち</small></div><div><span>LATEST NIGHTLY</span><strong id="stat-release">—</strong><small>最終公開</small></div></section>
+      <section class="stats" aria-label="現在の状況"><div><span>OPEN VOICES</span><strong id="stat-open">00</strong><small>対応中の声</small></div><div><span>IN PROGRESS</span><strong id="stat-progress">00</strong><small>進行中の案件</small></div><div><span>READY TO MERGE</span><strong id="stat-ready">00</strong><small>PR チェック待ち</small></div><div><span>LATEST MERGE</span><strong id="stat-release">—</strong><small>最終マージ</small></div></section>
       <section class="section team-section" aria-labelledby="team-heading"><div class="section-heading"><div><span class="section-kicker">01 / THE TEAM</span><h2 id="team-heading">今夜のチーム</h2></div><p>役割ごとに、担当している仕事を表示します。</p></div><div id="team" class="team-grid"></div></section>
       <section class="section flow-section" aria-labelledby="flow-heading"><div class="section-heading"><div><span class="section-kicker">02 / WORKFLOW</span><h2 id="flow-heading">声から公開まで</h2></div><p>似た声は裏側でまとめ、人の判断が必要な時だけ相談します。</p></div><div id="board" class="board"></div></section>
       <section class="bottom-grid"><div class="section activity-section"><div class="section-heading tight"><div><span class="section-kicker">03 / ACTIVITY</span><h2>最近の動き</h2></div></div><div id="activity" class="activity"></div></div><div class="section release-section" id="release-board"><div class="section-heading tight"><div><span class="section-kicker">04 / RELEASE</span><h2>出荷記録</h2></div></div><div id="releases" class="releases"></div></div></section>
     </main>
-    <footer><span>TONARIUM <b>✦</b> AGENT STUDIO</span><span>VOICE TO NIGHTLY · WITH CARE</span></footer>
+    <footer><span>TONARIUM <b>✦</b> AGENT STUDIO</span><span>VOICE TO MAIN · WITH CARE</span></footer>
   </div>
   <script type="module" src="/app.js"></script>
 </body>

@@ -5,6 +5,7 @@ import { Store } from './store.js';
 import { AI } from './ai.js';
 import { GitHub } from './git.js';
 import { DiscordTransport } from './discord.js';
+import { Translator } from './translation.js';
 import { Engine } from './engine.js';
 import { Dashboard } from './dashboard.js';
 
@@ -13,7 +14,8 @@ const config = getConfig();
 const store = new Store(join(root,'.data','state.sqlite'));
 const ai = new AI(config);
 const git = new GitHub(config,root);
-const discord = new DiscordTransport(config,store);
+const translator = new Translator(config,ai,root);
+const discord = new DiscordTransport(config,store,translator);
 let dashboard;
 const engine = new Engine(config,store,ai,git,discord,() => dashboard?.notify());
 dashboard = new Dashboard(config,store,engine,root);

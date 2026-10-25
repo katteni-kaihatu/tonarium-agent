@@ -14,7 +14,6 @@ export class Engine {
     this.busyWorkers = new Set();
     this.releasing = false;
     this.lastReleaseAttempt = 0;
-    this.lastSetupWarning = 0;
     this.timer = null;
   }
   event(id, actor, kind, text) {
@@ -35,14 +34,19 @@ export class Engine {
   async feedback(id) {
     if (this.active.has(id)) { this.pendingFeedback.add(id); return; }
     this.active.add(id);
+    let snapshot;
     try {
       const ticket = this.store.get(id);
       if (!ticket || !['intake','waiting_info','decision'].includes(ticket.status)) return;
       if (ticket.status === 'decision' && ticket.decision_thread_id) return;
+      const baseSha = ticket.base_sha || await this.git.baseHead();
+      if (!ticket.base_sha) this.store.update(id, { base_sha:baseSha });
       const history = await this.discord.history(id);
-      const similar = this.store.list().filter(row => row.id !== id && !['grouped','failed'].includes(row.status)).slice(0,50)
+      if (!history.trim()) return;
+      snapshot = await this.git.snapshotWorktree(`intake-${id}-${Date.now()}`,baseSha);
+      const similar = this.store.list().filter(row => row.id !== id && !['grouped','failed','merged','resolved_existing'].includes(row.status)).slice(0,50)
         .map(row => ({ id:row.id,title:row.title,summary:row.summary,status:row.status }));
-      const result = await this.ai.ask(roleName('intake'), `Discord のフィードバックを聞き取る担当です。まず既存案件の似た声を探し、このリポジトリのコードと docs を読み、すでに実装済みの機能か調べてください。似た案件があれば duplicateOf にその正確な ID を入れます。既存機能で解決できるなら alreadyExists=true、evidencePath に確認したリポジトリ相対ファイルパスを入れ、使い方を reply で伝えます。機能が存在しても報告が不具合なら完了扱いにしません。断定できない場合は質問します。返す JSON: {"ready": boolean, "reply": "ユーザーへの自然な日本語の短い返信または質問", "title": "短い件名", "summary": "要約", "criteria": ["受け入れ条件"], "duplicateOf": "既存案件IDまたは空文字", "alreadyExists": boolean, "evidencePath": "リポジトリ相対パスまたは空文字"}。既出内容を繰り返して質問しないでください。\n\nスレッド名: ${ticket.title}\n${history}\n\n既存案件: ${JSON.stringify(similar)}`, { cwd: this.config.repo, repoReadOnly: true });
+      const result = await this.ai.ask(roleName('intake'), `Discord のフィードバックを聞き取る担当です。この作業コピーは発言時の ${this.config.baseBranch || 'main'} (${baseSha}) です。まず既存案件の似た声を探し、このリポジトリのコードと docs を読み、すでに実装済みの機能か調べてください。似た案件があれば duplicateOf にその正確な ID を入れます。既存機能で解決できるなら alreadyExists=true、evidencePath に確認したリポジトリ相対ファイルパスを入れ、使い方を reply で伝えます。機能が存在しても報告が不具合なら完了扱いにしません。断定できない場合は質問します。返す JSON: {"ready": boolean, "reply": "ユーザーへの自然な日本語の短い返信または質問", "title": "短い件名", "summary": "要約", "criteria": ["受け入れ条件"], "duplicateOf": "既存案件IDまたは空文字", "alreadyExists": boolean, "evidencePath": "リポジトリ相対パスまたは空文字"}。既出内容を繰り返して質問しないでください。\n\nスレッド名: ${ticket.title}\n${history}\n\n既存案件: ${JSON.stringify(similar)}`, { cwd: snapshot.path, repoReadOnly: true });
       const update = { title: trim(result.title || ticket.title, 100), summary: trim(result.summary, 3000), criteria: JSON.stringify(asList(result.criteria)) };
       this.store.update(id, update);
       const duplicate = similar.find(row => row.id === String(result.duplicateOf));
@@ -53,8 +57,8 @@ export class Engine {
         return;
       }
       const evidence = String(result.evidencePath || '').replace(/\\/g,'/');
-      const evidenceFile = resolve(this.config.repo,evidence);
-      const insideRepo = evidence && !isAbsolute(evidence) && !relative(this.config.repo,evidenceFile).startsWith('..');
+      const evidenceFile = resolve(snapshot.path,evidence);
+      const insideRepo = evidence && !isAbsolute(evidence) && !relative(snapshot.path,evidenceFile).startsWith('..');
       if (result.alreadyExists && insideRepo && existsSync(evidenceFile)) {
         this.store.update(id, { status:'resolved_existing' });
         this.event(id,'intake','existing',`既存機能で対応: ${evidence}`);
@@ -72,6 +76,7 @@ export class Engine {
       await this.plan(id, history);
     } catch (error) { await this.fail(id, 'intake', error); }
     finally {
+      if (snapshot) await this.git.removeWorktree(snapshot.path);
       this.active.delete(id);
       this.onChange();
       if (this.pendingFeedback.delete(id)) queueMicrotask(() => this.feedback(id));
@@ -79,7 +84,7 @@ export class Engine {
   }
   async plan(id, history, decisionAnswer = '') {
     const ticket = this.store.get(id);
-    const candidates = this.store.list().filter(row => row.id !== id && !['grouped','failed','deployed'].includes(row.status))
+    const candidates = this.store.list().filter(row => row.id !== id && !['grouped','failed','merged','resolved_existing'].includes(row.status))
       .map(row => ({ id: row.id, title: row.title, summary: row.summary, status: row.status })).slice(0, 50);
     const result = await this.ai.ask(roleName('pm'), `次の声を開発案件に整理してください。似た既存案件があれば duplicateOf に正確な ID を入れてください。人の製品判断が必要なら needsDecision=true として、問いを明確にしてください。単なる実装上の選択は自分で判断してください。返す JSON: {"duplicateOf": "既存IDまたは空文字", "needsDecision": boolean, "decisionQuestion": "判断すべき内容と選択肢", "title": "短い件名", "summary": "背景と期待結果", "criteria": ["観測可能な受け入れ条件"], "implementationTask": "実装担当への具体的な指示"}。\n\n現案件: ${JSON.stringify({id,title:ticket.title,summary:ticket.summary,criteria:ticket.criteria,history,decisionAnswer})}\n既存案件: ${JSON.stringify(candidates)}`);
     const duplicate = candidates.find(row => row.id === String(result.duplicateOf));
@@ -147,9 +152,11 @@ export class Engine {
       const ticket = this.store.update(id, { status: 'coding', worker: worker.id, error: null });
       this.event(id, worker.id, 'coding', '専用 worktree で実装を開始');
       await this.git.prepare();
-      const issue = await this.git.issue(ticket.title, `Discord feedback: https://discord.com/channels/@me/${id}\n\n${ticket.summary}\n\nAcceptance criteria:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}`).catch(error => { this.event(id,'pm','issue_warning',error.message); return null; });
+      const baseSha = ticket.base_sha || await this.git.baseHead();
+      if (!ticket.base_sha) this.store.update(id, { base_sha:baseSha });
+      const issue = await this.git.issue(ticket.title, `Discord feedback: ${await this.discord.url(id)}\nBase ${this.config.baseBranch || 'main'}: ${baseSha}\n\n${ticket.summary}\n\nAcceptance criteria:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}`).catch(error => { this.event(id,'pm','issue_warning',error.message); return null; });
       if (issue) this.store.update(id, { issue_number: issue });
-      worktree = await this.git.worktree(`task-${id}-${Date.now()}`);
+      worktree = await this.git.worktree(`task-${id}-${Date.now()}`,baseSha);
       const linked = this.store.list().filter(row => row.parent_ticket_id === id).map(row => row.summary);
       const task = `${this.store.getKv(`task:${id}`) || ticket.summary}\n\n受け入れ条件:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}\n\n追加の声:\n${linked.join('\n')}`;
       const report = await this.ai.code(worker.name, task, worktree.path);
@@ -161,7 +168,7 @@ export class Engine {
       }
       await this.git.test(worktree.path);
       await this.git.commitPush(worktree.path, worktree.branch, `feat(agent): ${ticket.title}`.slice(0, 100));
-      const pr = await this.git.pr(ticket.title, `${issue ? `Closes #${issue}\n\n` : ''}${ticket.summary}\n\nChecks: npm run typecheck, npm run build, npm run test:client, npm run test:sync\n\nDiscord thread: ${id}`, worktree.branch);
+      const pr = await this.git.pr(ticket.title, `${issue ? `Closes #${issue}\n\n` : ''}${ticket.summary}\n\nFeedback base: ${baseSha}\nChecks: npm run typecheck, npm run build, npm run test:client, npm run test:sync\n\nDiscord thread: ${id}`, worktree.branch);
       this.store.update(id, { status: 'pr_ready', pr_number: pr, branch: worktree.branch, worker: null });
       this.event(id, worker.id, 'pr_ready', `PR #${pr} を検証済み。出荷待ち`);
       await this.discord.say(id, `**${worker.name}｜実装**\n変更とテストが完了しました。PR #${pr} を出荷待ちに入れました。`);
@@ -170,87 +177,75 @@ export class Engine {
   }
   async release(force = false) {
     if (this.releasing) return false;
-    const ready = this.store.list().filter(row => row.status === 'pr_ready' && row.branch);
+    const ready = this.store.list().filter(row => row.status === 'pr_ready' && row.branch && row.pr_number);
     if (!ready.length) return false;
-    if (!this.config.coolifyWebhook || !this.config.coolifyApiBase || !this.config.coolifyToken || !this.config.nightlyUrl) {
-      if (Date.now() - this.lastSetupWarning > 60 * 60_000) {
-        this.event(null,'release','setup','Coolify の URL・API 設定が揃うまで公開を保留');
-        this.lastSetupWarning = Date.now();
-      }
-      return false;
-    }
     if (!force && Date.now() - Math.min(...ready.map(row => row.updated_at)) < this.config.batchMs) return false;
     this.releasing = true;
     this.lastReleaseAttempt = Date.now();
-    let worktree;
     const releaseId = this.store.release('integrating', ready.map(row => row.id));
+    let merged = 0;
+    let finalSha = '';
     try {
-      const selection = await this.ai.ask(roleName('release'), `出荷担当として同時に公開する PR を選んでください。既定では全部まとめます。依存関係の理由で除外するものだけ省いてください。返す JSON: {"selectedIds": ["ticket id"], "notes": "短い公開説明"}。\n\n候補: ${JSON.stringify(ready.map(x => ({id:x.id,title:x.title,summary:x.summary,pr:x.pr_number})))}`);
+      const selection = await this.ai.ask(roleName('release'), `出荷担当として今回 ${this.config.baseBranch || 'main'} にマージする PR を選んでください。既定では全部処理します。依存関係の理由で除外するものだけ省いてください。返す JSON: {"selectedIds": ["ticket id"], "notes": "短いマージ説明"}。\n\n候補: ${JSON.stringify(ready.map(x => ({id:x.id,title:x.title,summary:x.summary,pr:x.pr_number})))}`);
       const selected = ready.filter(row => asList(selection.selectedIds).includes(row.id));
       if (!selected.length) throw new Error('Release agent selected no PRs');
       this.store.updateRelease(releaseId, { tickets: JSON.stringify(selected.map(x => x.id)) });
-      this.event(null,'release','batch',`${selected.length} 件を統合: ${trim(selection.notes, 300)}`);
-      await this.git.prepare();
-      worktree = await this.git.worktree(`release-${releaseId}-${Date.now()}`);
+      this.event(null,'release','batch',`${selected.length} 件の PR を確認: ${trim(selection.notes, 300)}`);
       for (const ticket of selected) {
-        this.store.update(ticket.id, { status: 'integrating' });
+        let worktree;
         try {
-          await this.git.mergeInto(worktree.path, ticket.branch);
-        } catch (mergeError) {
-          this.event(ticket.id,'integrator','conflict',`競合解決中: ${trim(mergeError.message, 300)}`);
-          const report = await this.ai.code(roleName('integrator'), `現在 Git merge 中の競合を解決してください。競合マーカーを除去し、両方の変更を満たしてください。git add/commit/push は行わないでください。対象: ${ticket.title}。`, worktree.path, { provider: this.config.integrationProvider });
-          await this.git.git(['add','-A'],worktree.path);
-          await this.git.git(['commit','--no-edit'],worktree.path);
-          this.event(ticket.id,'integrator','resolved',trim(report,300));
+          const before = await this.git.prInfo(ticket.pr_number);
+          if (before.state === 'MERGED') {
+            await this.markMerged(ticket,before.mergeCommit?.oid || await this.git.baseHead());
+            merged++;
+            continue;
+          }
+          this.store.update(ticket.id, { status: 'integrating' });
+          const integratedMain = await this.git.baseHead();
+          await this.git.git(['fetch','origin',ticket.branch]);
+          worktree = await this.git.worktree(`release-${releaseId}-${ticket.id}-${Date.now()}`,`origin/${ticket.branch}`);
+          try { await this.git.mergeMainInto(worktree.path); }
+          catch (mergeError) {
+            const conflicts = (await this.git.git(['diff','--name-only','--diff-filter=U'],worktree.path)).stdout;
+            if (!conflicts) throw mergeError;
+            this.event(ticket.id,'integrator','conflict',`競合解決中: ${trim(conflicts, 300)}`);
+            const report = await this.ai.code(roleName('integrator'), `現在 Git merge 中の競合を解決してください。競合マーカーを除去し、両方の変更を満たしてください。git add/commit/push は行わないでください。対象: ${ticket.title}。`, worktree.path, { provider: this.config.integrationProvider });
+            await this.git.git(['add','-A'],worktree.path);
+            await this.git.git(['commit','--no-edit'],worktree.path);
+            this.event(ticket.id,'integrator','resolved',trim(report,300));
+          }
+          await this.git.test(worktree.path);
+          const head = await this.git.pushBranch(worktree.path,ticket.branch);
+          this.event(ticket.id,'integrator','verified',`最新 ${this.config.baseBranch || 'main'} と統合した状態でテスト完了: ${head.slice(0,8)}`);
+          const checks = await this.git.waitForChecks(ticket.pr_number,head);
+          this.event(ticket.id,'release','checks',`PR #${ticket.pr_number}: ${checks} 件の GitHub チェックを確認`);
+          if (await this.git.baseHead() !== integratedMain) throw new Error(`${this.config.baseBranch || 'main'} changed during PR checks; retry integration against the latest commit`);
+          const mergeSha = await this.git.mergePr(ticket.pr_number,head);
+          finalSha = mergeSha || await this.git.baseHead();
+          await this.markMerged(ticket,finalSha);
+          merged++;
+        } finally {
+          if (worktree) await this.git.removeWorktree(worktree.path);
         }
       }
-      await this.git.test(worktree.path);
-      const sha = await this.git.pushNightly(worktree.path);
-      this.store.updateRelease(releaseId, { status: 'deploying', commit_sha: sha });
-      this.event(null,'integrator','verified',`${selected.length} 件の統合ビルドを検証: ${sha.slice(0,8)}`);
-      const deploy = await this.deploy(sha);
-      this.store.updateRelease(releaseId, { status: 'deployed', deployment_id: deploy.id, url: this.config.nightlyUrl });
-      for (const ticket of selected) {
-        this.store.update(ticket.id, { status: 'deployed' });
-        this.event(ticket.id,'release','deployed',`${this.config.nightlyUrl} (${sha.slice(0,8)})`);
-        if (ticket.issue_number) await this.git.closeIssue(ticket.issue_number, `Web nightly ${sha.slice(0,8)}: ${this.config.nightlyUrl}`).catch(error => this.event(ticket.id,'release','issue_warning',error.message));
-        await this.discord.say(ticket.id, `**${roleName('release')}｜出荷**\nWeb nightly に公開しました。${this.config.nightlyUrl}\n公開版: ${sha.slice(0,8)}`).catch(error => this.event(ticket.id,'release','discord_warning',error.message));
-      }
+      finalSha = await this.git.baseHead();
+      this.store.updateRelease(releaseId, { status: 'merged', commit_sha:finalSha, url:`https://github.com/${this.config.githubRepo}/tree/${this.config.baseBranch || 'main'}` });
       return true;
     } catch (error) {
-      this.store.updateRelease(releaseId, { status: 'failed', error: trim(error.message, 2000) });
+      this.store.updateRelease(releaseId, { status: merged ? 'partial' : 'failed', commit_sha:finalSha || null, error: trim(error.message, 2000) });
       for (const ticket of ready) if (this.store.get(ticket.id)?.status === 'integrating') this.store.update(ticket.id, { status: 'pr_ready' });
       this.event(null,'release','failed',error.message);
       return false;
     } finally {
-      if (worktree) await this.git.removeWorktree(worktree.path);
       this.releasing = false;
       this.onChange();
     }
   }
-  async deploy(sha) {
-    const response = await fetch(this.config.coolifyWebhook, { method: 'POST', headers: { Authorization: `Bearer ${this.config.coolifyToken}` }, signal: AbortSignal.timeout(30_000) });
-    if (!response.ok) throw new Error(`Coolify deploy webhook HTTP ${response.status}: ${(await response.text()).slice(0,500)}`);
-    const payload = await response.json();
-    const id = payload.deployment_uuid || payload.uuid || payload.deployments?.[0]?.deployment_uuid;
-    if (!id) throw new Error(`Coolify did not return deployment UUID: ${JSON.stringify(payload).slice(0,500)}`);
-    const deadline = Date.now() + this.config.releaseTimeoutMs;
-    while (Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, this.config.pollMs));
-      const statusResponse = await fetch(`${this.config.coolifyApiBase}/api/v1/deployments/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${this.config.coolifyToken}` }, signal: AbortSignal.timeout(30_000) });
-      if (!statusResponse.ok) throw new Error(`Coolify status HTTP ${statusResponse.status}`);
-      const state = await statusResponse.json();
-      if (/failed|cancelled|error/i.test(state.status || '')) throw new Error(`Coolify deployment failed: ${state.status}`);
-      if (/finished|success|completed/i.test(state.status || '')) {
-        if (state.commit && !sha.startsWith(state.commit) && !state.commit.startsWith(sha)) throw new Error(`Coolify deployed ${state.commit}, expected ${sha}. Check the nightly application's Git branch.`);
-        const health = await fetch(this.config.nightlyUrl, { signal: AbortSignal.timeout(15_000) });
-        if (!health.ok) throw new Error(`Nightly URL health HTTP ${health.status}`);
-        const serviceHealth = await fetch(new URL('/healthz',this.config.nightlyUrl), { signal: AbortSignal.timeout(15_000) });
-        if (!serviceHealth.ok) throw new Error(`Nightly service health HTTP ${serviceHealth.status}`);
-        return { id, sha };
-      }
-    }
-    throw new Error(`Coolify deployment ${id} timed out`);
+  async markMerged(ticket,sha) {
+    this.store.update(ticket.id, { status:'merged' });
+    this.event(ticket.id,'release','merged',`PR #${ticket.pr_number} を ${this.config.baseBranch || 'main'} へマージ: ${sha?.slice(0,8) || ''}`);
+    if (ticket.issue_number) await this.git.closeIssue(ticket.issue_number, `PR #${ticket.pr_number} merged into ${this.config.baseBranch || 'main'}`).catch(error => this.event(ticket.id,'release','issue_warning',error.message));
+    await this.discord.say(ticket.id, `**${roleName('release')}｜出荷**\nPR #${ticket.pr_number} のチェックを確認し、${this.config.baseBranch || 'main'} にマージしました。${sha ? `\nマージ commit: ${sha.slice(0,8)}` : ''}`).catch(error => this.event(ticket.id,'release','discord_warning',error.message));
   }
   async fail(id, actor, error) {
     const message = trim(error?.message || error, 2000);

@@ -1,21 +1,25 @@
 import { existsSync } from 'node:fs';
 import { getConfig } from './config.js';
 import { command } from './command.js';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Client, GatewayIntentBits, PermissionFlagsBits } from 'discord.js';
 
 const config = getConfig();
 const checks = [
   ['Tonarium checkout', existsSync(config.repo), config.repo],
   ['Discord Bot token', Boolean(config.discordToken), 'DISCORD_TOKEN'],
   ['Discord feedback channel', Boolean(config.discordChannelId), config.discordChannelId],
-  ['Coolify webhook', Boolean(config.coolifyWebhook), 'COOLIFY_DEPLOY_WEBHOOK'],
-  ['Coolify API token', Boolean(config.coolifyToken), 'COOLIFY_API_TOKEN'],
-  ['Coolify API base', Boolean(config.coolifyApiBase), 'COOLIFY_API_BASE'],
-  ['Web nightly URL', Boolean(config.nightlyUrl), 'NIGHTLY_URL']
+  ['GitHub release branch', Boolean(config.baseBranch), config.baseBranch]
 ];
-for (const executable of ['git','gh',config.planningProvider,config.codingProvider]) {
+if (config.translationProvider === 'openai') checks.push(['OpenAI translation key',Boolean(config.translationApiKey),'OPENAI_API_KEY']);
+for (const executable of [...new Set(['git','gh',config.planningProvider,config.codingProvider,config.integrationProvider].filter(x => x !== 'codex'))]) {
   try { await command(executable,['--version'],{timeoutMs:10_000}); checks.push([`${executable} CLI`,true,'found']); }
   catch { checks.push([`${executable} CLI`,false,'not found or not executable']); }
 }
+const codexScript = join(dirname(dirname(fileURLToPath(import.meta.url))),'node_modules','@openai','codex','bin','codex.js');
+try { const result = await command(process.execPath,[codexScript,'--version'],{timeoutMs:10_000}); checks.push(['Project Codex CLI',/0\.164\.0/.test(result.stdout),'gpt-6.1-sol compatible']); }
+catch { checks.push(['Project Codex CLI',false,'run npm ci']); }
 if (config.authMode === 'subscription') {
   try {
     const result = await command('claude',['auth','status'],{timeoutMs:10_000});
@@ -26,5 +30,22 @@ if (config.authMode === 'subscription') {
     checks.push(['Codex subscription login',/Logged in/i.test(result.stdout + result.stderr),'codex login']);
   } catch { checks.push(['Codex subscription login',false,'codex login']); }
 }
+if (config.discordToken) {
+  const bot = new Client({intents:[GatewayIntentBits.Guilds,GatewayIntentBits.GuildMessages,GatewayIntentBits.MessageContent]});
+  try {
+    await bot.login(config.discordToken);
+    const channel = await bot.channels.fetch(config.discordChannelId);
+    const member = await channel.guild.members.fetchMe();
+    const permissions = channel.permissionsFor(member);
+    for (const [name,flag] of [
+      ['View Channel',PermissionFlagsBits.ViewChannel],
+      ['Read Message History',PermissionFlagsBits.ReadMessageHistory],
+      ['Send Messages',PermissionFlagsBits.SendMessages],
+      ['Create Public Threads',PermissionFlagsBits.CreatePublicThreads],
+      ['Send Messages in Threads',PermissionFlagsBits.SendMessagesInThreads]
+    ]) checks.push([`Discord ${name}`,permissions.has(flag),channel.name]);
+  } catch { checks.push(['Discord Bot connection',false,'Check token, Message Content Intent and channel ID']); }
+  finally { bot.destroy(); }
+}
 for (const [name,ok,detail] of checks) console.log(`${ok ? 'OK' : 'SETUP'}  ${name}: ${detail}`);
-console.log('\nComplete every SETUP item before connecting a live feedback channel.');
+console.log(checks.every(([,ok]) => ok) ? '\nReady for live feedback.' : '\nComplete every SETUP item before connecting a live feedback channel.');

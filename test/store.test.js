@@ -12,6 +12,7 @@ test('ticket state and events survive a restart; interrupted work is queued', ()
     let store = new Store(path);
     store.create('thread-1','要望');
     store.update('thread-1',{status:'coding',worker:'builder1',criteria:JSON.stringify(['表示される'])});
+    store.update('thread-1',{base_sha:'abc123'});
     store.event('thread-1','そら','coding','着手');
     store.close();
     store = new Store(path);
@@ -19,6 +20,7 @@ test('ticket state and events survive a restart; interrupted work is queued', ()
     store.recover();
     assert.equal(store.get('thread-1').status,'queued');
     assert.equal(store.get('thread-1').worker,null);
+    assert.equal(store.get('thread-1').base_sha,'abc123');
     assert.equal(store.events()[0].text,'着手');
     store.close();
   } finally { rmSync(dir,{recursive:true,force:true}); }

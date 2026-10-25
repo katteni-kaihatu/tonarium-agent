@@ -14,18 +14,18 @@ export class Dashboard {
     const tickets = this.store.list().map(row => ({ ...row, criteria: JSON.parse(row.criteria || '[]') }));
     const releases = this.store.releases().map(row => ({ ...row, tickets: JSON.parse(row.tickets || '[]') }));
     return {
-      title: 'TONARIUM / NIGHT SHIFT',
+      title: 'TONARIUM / AGENT STUDIO',
       mode: this.config.discordToken ? 'live' : 'setup',
       time: Date.now(),
       roles: roles.map(role => {
         const status = { intake:['intake','waiting_info'], pm:['planning','decision'], lead:['queued'], integrator:['integrating'], release:['pr_ready'] }[role.id];
-        return { ...role, ticket: tickets.find(ticket => ticket.worker === role.id)?.title || tickets.find(ticket => status?.includes(ticket.status))?.title || (role.id === 'release' && this.engine.releasing ? 'nightly を出荷中' : '') };
+        return { ...role, ticket: tickets.find(ticket => ticket.worker === role.id)?.title || tickets.find(ticket => status?.includes(ticket.status))?.title || (role.id === 'release' && this.engine.releasing ? 'PR を確認・マージ中' : '') };
       }),
       tickets,
       events: this.store.events(),
       releases,
-      nightlyUrl: this.config.nightlyUrl || '',
-      releaseConfigured: Boolean(this.config.coolifyWebhook && this.config.coolifyApiBase && this.config.coolifyToken && this.config.nightlyUrl)
+      mainUrl: `https://github.com/${this.config.githubRepo}/tree/${this.config.baseBranch || 'main'}`,
+      releaseBranch: this.config.baseBranch || 'main'
     };
   }
   notify() {

@@ -1,91 +1,77 @@
 # Tonarium Agent Studio
 
-Discord のフィードバックを AI チームが聞き取り、Tonarium の Web nightly まで届ける常駐オーケストレーターです。対象は通常のテキストチャンネル `1561758758776864838` に作られたスレッドです。チームの状況はローカルのダッシュボードに表示します。
+Discord の声を聞き取り、GitHub PR の作成・チェック・`main` へのマージまで進める常駐エージェントです。対象は `.env` の `DISCORD_CHANNEL_ID` で指定した通常のテキストチャンネルです。親チャンネルへ発言すると Bot がそのメッセージから公開スレッドを作り、ひよりが詳細を聞きます。ユーザーが手動で作ったスレッドも受け付けます。
 
-## 動き方
+Tonarium リポジトリの既定ブランチ名は `master` ではなく **`main`** です。案件ごとに最初の発言を受けた時点の `main` commit を保存し、その commit の worktree で既存機能を調べ、実装します。後から `main` が進んでも、最初の判断に使ったコードは変わりません。
 
 ```mermaid
 flowchart LR
-  Discord[Discord スレッド] --> H[ひより / 聞き取り]
-  H -->|似た声| Group[既存案件に統合]
-  H -->|すでにある機能| Existing[使い方を返信]
+  Voice[親チャンネルの発言] --> Thread[Bot がスレッドを作る]
+  Thread --> H[ひより / 聞き取り・重複と既存機能の確認]
   H --> S[さくら / PM]
   S -->|製品判断が必要| Forum[判断用フォーラム]
   Forum --> S
   S --> A[あおい / 開発リード]
-  A --> Workers[そら・ゆず・もも / 別々の worktree]
-  Workers --> PR[GitHub PR]
-  PR --> I[すず / 統合と競合解決]
-  I --> M[みのり / 出荷]
-  M --> C[Coolify Web nightly]
+  A --> Workers[そら・ゆず・もも / 並列 worktree]
+  Workers --> PR[main 宛ての PR]
+  PR --> I[すず / 最新 main との統合・競合解決・テスト]
+  I --> M[みのり / GitHub チェック確認・PR マージ]
+  M --> Main[main]
 ```
 
-- **ひより**はスレッドで足りない情報を聞きます。既存案件を照合し、リポジトリを読み取って既存機能かも判断します。既存機能として閉じる場合は根拠ファイルの存在を確認します。
-- **さくら**は要望を整理し、重複をまとめ、製品判断が必要な点だけ判断用フォーラムへ投稿します。フォーラムを設定しない間は元のスレッドで質問します。
-- **あおい**は作業範囲と受け入れ条件を確認します。
-- **そら・ゆず・もも**は最大 3 件の案件を並行して実装します。各案件は Tonarium リポジトリの別 worktree です。
-- **すず**は PR をまとめて統合し、競合を解決して、統合後のブランチに対してテストを実行します。
-- **みのり**は最大 30 分単位で公開候補をまとめ、`agent/web-nightly` に反映して Coolify を起動します。Coolify のデプロイ状態、デプロイされた commit、nightly URL の応答を確認してから Discord に公開を報告します。
+似た声は既存案件にまとめます。リポジトリの実ファイルを確認できる既存機能は使い方を返信して閉じます。製品判断が必要な案件だけ判断用フォーラムに投稿します。フォーラム ID が未設定の場合は元のスレッドで質問します。
 
-オーケストレーター自身はこの独立したフォルダで動きます。worktree が必要なのは **同じ Tonarium コードを同時に編集する実装・統合作業**です。Tonarium の普段の `main` と既存の作業用 worktree は使いません。
+ユーザーの発言と Bot の返答は、同じスレッドに **日本語・英語・韓国語**を併記します。元の発言は消しません。判断用フォーラムの会話も翻訳します。翻訳が失敗しても元の発言の聞き取りは続けます。
+
+実装担当は最大 3 件を並列処理します。各案件で `npm ci`、`npm run typecheck`、`npm run build`、`npm run test:client`、`npm run test:sync` を通してから PR を作ります。すずは PR ブランチへ最新 `main` を取り込み、競合を解決し、統合状態で同じチェックを実行します。みのりは GitHub の Web チェックの成功を待ち、PR の head commit を確認して `main` にマージします。チェックが現れない場合もマージしません。複数 PR は一件ずつ最新 `main` へ合わせます。
 
 ## セットアップ
 
-Node.js 22.13 以降、Git、GitHub CLI (`gh`)、Codex CLI、Claude Code CLI を用意してください。この PC では `gh`、Claude、Codex のログインがすでに確認できています。既定の `AGENT_AUTH_MODE=subscription` では **Claude Max と ChatGPT/Codex のサブスク枠**で CLI を実行し、モデルの子プロセスから API キー環境変数を外します。OpenAI / Anthropic の API キーは不要です。このアプリは常駐するローカルプロセスです。
+Node.js 22.13 以降、Git、GitHub CLI (`gh`)、Claude Code CLI が必要です。Codex CLI はこのプロジェクトに `@openai/codex` を固定しており、システムの古い CLI に依存しません。既定では Claude Max と ChatGPT/Codex のサブスクログインを使い、AI 用 API キーを子プロセスへ渡しません。
 
 ```powershell
 cd C:\Users\neo\GitHub\tonarium-agent
-Copy-Item .env.example .env
-npm install
+Copy-Item .env.example .env  # まだ .env がない場合だけ
+npm ci
 npm run doctor
 npm start
 ```
 
-`.env` に次を設定します。
+既存の `.env` はそのまま使えます。旧 `NIGHTLY_BRANCH` と `COOLIFY_*` は現在の出荷フローでは参照しません。必要な設定は次の通りです。
 
-| 項目 | 設定内容 |
+| 設定 | 内容 |
 | --- | --- |
-| `DISCORD_TOKEN` | Discord Bot token。Developer Portal で **Message Content Intent** を有効化します。対象チャンネルとスレッドの閲覧、履歴閲覧、投稿権限も与えます。 |
-| `DISCORD_CHANNEL_ID` | フィードバック用テキストチャンネル。初期値は `1561758758776864838`。 |
-| `DISCORD_DECISION_FORUM_ID` | 任意。製品判断を頼むフォーラムのチャンネル ID。Bot が投稿できる権限が必要です。 |
-| `DISCORD_DECISION_MENTION_ID` | 任意。判断投稿で呼ぶ担当者の **ユーザー ID**。 |
-| `TONARIUM_REPO` | Tonarium の既存 Git checkout。初期値は `C:\Users\neo\GitHub\tonarium-prototype`。 |
+| `DISCORD_TOKEN` | Discord Bot token。Developer Portal で Message Content Intent を有効にする。 |
+| `DISCORD_CHANNEL_ID` | フィードバック用テキストチャンネル。`.env` で指定します。 |
+| `DISCORD_DECISION_FORUM_ID` | 任意。判断だけを投稿するフォーラムの ID。 |
+| `DISCORD_DECISION_MENTION_ID` | 任意。判断投稿で呼ぶユーザー ID。 |
+| `TONARIUM_REPO` | Tonarium の既存 checkout。初期値 `C:\Users\neo\GitHub\tonarium-prototype`。 |
+| `GITHUB_REPO` | `katteni-kaihatu/tonarium-prototype`。`gh auth login` の書き込み権限が必要。 |
+| `RELEASE_BRANCH` | `main`。 |
 | `PLANNING_PROVIDER` | 聞き取り・PM・リード・出荷に使う `claude` または `codex`。 |
 | `CODING_PROVIDER` / `INTEGRATION_PROVIDER` | 実装・競合解決に使う `codex` または `claude`。 |
-| `AGENT_AUTH_MODE` | `subscription` が既定。各 CLI のログインを使います。 |
-| `CODEX_MODEL` | この PC の ChatGPT ログインで動作確認した `gpt-5.6-sol` を既定にしています。 |
-| `COOLIFY_DEPLOY_WEBHOOK` | **Web nightly 専用アプリ**の認証付きデプロイ Webhook。 |
-| `COOLIFY_API_TOKEN` | Coolify の API token。デプロイ起動と状態取得に必要です。 |
-| `COOLIFY_API_BASE` | Coolify のオリジン。例 `https://coolify.example.com`。`/api/v1` は付けません。 |
-| `NIGHTLY_URL` | 公開後に HTTP 応答を確認する Web nightly の URL。 |
+| `CODEX_MODEL` / `CODEX_SPEED` | 既定は `gpt-6.1-sol` / `fast`。この PC でサブスクログインによる応答を確認済み。 |
+| `TRANSLATION_PROVIDER` | 既定は `claude`（サブスク）。`openai` を選ぶと翻訳だけ OpenAI API を使う。 |
+| `TRANSLATION_MODEL` | OpenAI API 翻訳時のモデル。既定は `gpt-6-luna`。 |
+| `OPENAI_API_KEY` | `TRANSLATION_PROVIDER=openai` の場合だけ必要。Codex の聞き取り・実装には渡さない。 |
+| `RELEASE_BATCH_MINUTES` | PR をまとめる待ち時間。既定 30 分。 |
+| `REQUIRED_PR_CHECK` | GitHub で成功を待つチェック名。既定 `web`。 |
 
-名前は `TONARIUM_TEAM_NAMES` の JSON で変更できます。例: `{"pm":"花子","release":"太郎"}`。
+Bot には対象チャンネルで **View Channel、Read Message History、Create Public Threads、Send Messages in Threads** を与えてください。判断用フォーラムを使う場合は投稿権限も必要です。Message Content Intent の詳細は [Discord の公式資料](https://github.com/discord/discord-api-docs/blob/main/developers/events/gateway.mdx) を参照してください。
 
-Coolify には **専用の Web nightly アプリ**を作り、Git リポジトリを `katteni-kaihatu/tonarium-prototype`、ブランチを `agent/web-nightly` に設定してください。ブランチは `origin/main` から作成済みです。既存の Dockerfile / Compose 構成を使います。Coolify 側の Git push 自動デプロイは無効にし、このエージェントの Webhook を公開トリガーにしてください。既存の native / Electron nightly の GitHub Actions は触りません。
+Codex の `gpt-6.1-sol` と Fast モードは [OpenAI Docs のモデル情報](https://learn.chatgpt.com/docs/models#gpt-61-sol) と [速度設定](https://learn.chatgpt.com/docs/agent-configuration/speed#fast-mode) に従っています。Fast はサブスクの利用枠を通常の 2.5 倍消費します。`CODEX_SPEED=standard` にすれば通常速度にできます。
 
-Bot の参加先では、通常のテキストチャンネル内にスレッドを作ってフィードバックを書きます。スレッド本文が曖昧なら、ひよりが同じスレッドで聞き返します。フォーラムは開発タスクの一覧には使わず、製品判断が必要な時だけ使います。
+OpenAI API 翻訳は [Responses API の Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs#structured-outputs-vs-json-mode) で日英韓の三項目を受け取ります。API 方式を選んだ場合、翻訳対象の発言は OpenAI API に送信されます。
 
 ## ダッシュボードと常駐
 
-既定の URL は `http://127.0.0.1:43879` です。担当者、案件の段階、最近の動き、出荷履歴がライブ更新されます。Discord token を入れるまでは **SETUP MODE** と表示されます。ダッシュボードにはフィードバックの要約が出るため、外部公開する場合は認証付きのプロキシを置いてください。
+既定のダッシュボード URL は `http://127.0.0.1:43879` です。担当者、案件の段階、最近の動き、PR マージ履歴をライブ更新します。要約には Discord の声が含まれるため、外部公開する場合は認証付きのプロキシを置いてください。
 
-Windows ログオン時に起動するタスクを登録するには、`.env` を完成させてから次を実行します。
+Windows ログオン時の起動タスクは `.env` を設定した後に登録できます。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install-startup-task.ps1
 Start-ScheduledTask -TaskName TonariumAgent
 ```
 
-実行状態は `npm run doctor` とダッシュボードで確認できます。ログオン前から常時動かす構成にする場合は、同じプロセスを専用ホストに移してサービスとして運用してください。`.data/state.sqlite` は案件と出荷履歴、`.worktrees/` は一時的な Git checkout です。これらと `.env` は Git に含めません。
-
-## 出荷条件
-
-各実装 worktree と統合候補 worktree で `npm ci`、`npm run typecheck`、`npm run build`、`npm run test:client`、`npm run test:sync` を通します。失敗した案件は止めて Discord とダッシュボードに表示します。Coolify の設定がまだない場合は PR を出荷待ちに保持します。デプロイの受付だけで「公開済み」とは記録しません。
-
-現在の実装では、Bot token、AI 認証、Coolify Webhook / API token / nightly URL が入力されるまでライブの Discord と Coolify には接続できません。ローカルのダッシュボードと状態管理は認証情報なしでも起動できます。
-
-## 技術メモ
-
-Discord のスレッドイベントと Message Content Intent は [Discord の公式資料](https://github.com/discord/discord-api-docs/blob/main/developers/events/gateway.mdx) に従っています。Coolify は [deploy webhook](https://coolify.io/docs/core/automation/deploy-webhooks) と [デプロイ状態 API](https://coolify.io/docs/api/endpoints/deployments/get-deployment-by-uuid) を使います。GitHub Actions の `GITHUB_TOKEN` で作成した PR はワークフローが自動実行されない場合があるため、この構成はローカルの `gh` 認証と統合 worktree の実テストを公開条件にしています（[GitHub の仕様](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)）。
-
-[GitHub Agentic Workflows](https://docs.github.com/en/copilot/concepts/agent-capabilities/agent-powered-workflows-and-operations/about-github-agentic-workflows) も Codex / Claude を実行できる OSS の選択肢です。このプロトタイプは、Discord の会話を継続して聞き取り、複数案件を一か所で束ねる常駐状態を必要とするため、専用の Node.js オーケストレーターにしています。
+`.data/state.sqlite` に案件、受信時の `main` commit、出荷履歴を保存します。`.worktrees/` は一時的な作業コピーです。これらと `.env` は Git に含めません。
