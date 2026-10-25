@@ -11,7 +11,7 @@ export class Store {
         id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
         summary TEXT NOT NULL DEFAULT '', criteria TEXT NOT NULL DEFAULT '[]',
         issue_number INTEGER, pr_number INTEGER, branch TEXT, worker TEXT,
-        last_message_id TEXT, parent_ticket_id TEXT, decision_thread_id TEXT, base_sha TEXT,
+        last_message_id TEXT, answered_message_id TEXT, parent_ticket_id TEXT, decision_thread_id TEXT, base_sha TEXT,
         error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS events (
@@ -25,6 +25,7 @@ export class Store {
       );
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
     if (!this.db.prepare('PRAGMA table_info(tickets)').all().some(column => column.name === 'base_sha')) this.db.exec('ALTER TABLE tickets ADD COLUMN base_sha TEXT');
+    if (!this.db.prepare('PRAGMA table_info(tickets)').all().some(column => column.name === 'answered_message_id')) this.db.exec('ALTER TABLE tickets ADD COLUMN answered_message_id TEXT');
   }
   get(id) { return this.db.prepare('SELECT * FROM tickets WHERE id=?').get(id); }
   list() { return this.db.prepare('SELECT * FROM tickets ORDER BY updated_at DESC LIMIT 200').all(); }
@@ -34,7 +35,7 @@ export class Store {
     return this.get(id);
   }
   update(id, patch) {
-    const allowed = ['title','status','summary','criteria','issue_number','pr_number','branch','worker','last_message_id','parent_ticket_id','decision_thread_id','base_sha','error'];
+    const allowed = ['title','status','summary','criteria','issue_number','pr_number','branch','worker','last_message_id','answered_message_id','parent_ticket_id','decision_thread_id','base_sha','error'];
     const entries = Object.entries(patch).filter(([key]) => allowed.includes(key));
     if (!entries.length) return this.get(id);
     const sql = entries.map(([key]) => `${key}=?`).join(',');
@@ -45,6 +46,7 @@ export class Store {
     this.db.prepare('INSERT INTO events (ticket_id,actor,kind,text,created_at) VALUES (?,?,?,?,?)').run(ticketId, actor, kind, String(message).slice(0, 2000), Date.now());
   }
   events(limit = 100) { return this.db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT ?').all(limit); }
+  latestEvent(ticketId,kind) { return this.db.prepare('SELECT * FROM events WHERE ticket_id=? AND kind=? ORDER BY id DESC LIMIT 1').get(ticketId,kind); }
   release(status, tickets = []) {
     const now = Date.now();
     return Number(this.db.prepare('INSERT INTO releases (status,tickets,created_at,updated_at) VALUES (?,?,?,?)').run(status, JSON.stringify(tickets), now, now).lastInsertRowid);

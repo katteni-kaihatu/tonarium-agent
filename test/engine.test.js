@@ -129,6 +129,36 @@ test('scheduler starts release on the next tick when batching is zero', async ()
   } finally { f.close(); }
 });
 
+test('intake assignments use five distinct agents and queue the sixth', async () => {
+  const f = fixture();
+  try {
+    const assigned = await Promise.all(Array.from({length:5},(_,index) => f.engine.acquireRole('聞き取り',`ticket-${index}`)));
+    assert.equal(new Set(assigned.map(role => role.id)).size,5);
+    let sixthAssigned = false;
+    const sixth = f.engine.acquireRole('聞き取り','ticket-6').then(role => { sixthAssigned = true; return role; });
+    assert.equal(sixthAssigned,false);
+    f.engine.releaseRole(assigned[0]);
+    assert.equal((await sixth).id,assigned[0].id);
+    assert.equal(f.engine.roleBusy.get(assigned[0].id),'ticket-6');
+    for (const role of assigned) f.engine.releaseRole(role);
+  } finally { f.close(); }
+});
+
+test('completed threads answer implementation questions without reopening the task', async () => {
+  const f = fixture();
+  try {
+    f.store.create('thread-1','サムネイル');
+    f.store.update('thread-1',{status:'merged',pr_number:94,last_message_id:'new-message',answered_message_id:'old-message'});
+    f.engine.discord.userMessage = async () => '利用者: 定期的ってどれくらい？';
+    f.engine.git.prDetails = async () => ({title:'サムネイル',files:['client/src/preview.ts']});
+    f.engine.ai = {ask:async () => ({answer:'client/src/preview.ts で30秒ごとに撮影します。'})};
+    await f.engine.receive('thread-1');
+    assert.equal(f.store.get('thread-1').status,'merged');
+    assert.equal(f.store.get('thread-1').answered_message_id,'new-message');
+    assert.match(f.sent[0].text,/30秒ごと/);
+  } finally { f.close(); }
+});
+
 test('release follows the release agent selected PR order', async () => {
   const f = fixture();
   try {

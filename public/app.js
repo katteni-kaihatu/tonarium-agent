@@ -25,7 +25,9 @@ function render(state) {
   if (state.mode === 'setup' && !banner) { banner = document.createElement('div'); banner.className='setup-banner'; banner.textContent='セットアップ中です。.env に Discord Bot の設定を追加すると、実際の活動がここに表示されます。'; document.querySelector('.hero-copy').append(banner); }
   if (state.mode === 'live' && banner) banner.remove();
 }
-fetch('/api/state').then(response => response.json()).then(render).catch(console.error);
+const refresh = () => fetch('/api/state').then(response => response.json()).then(render).catch(console.error);
+refresh();
 const events = new EventSource('/api/events');
 events.onmessage = message => render(JSON.parse(message.data));
+setInterval(refresh, 15_000);
 setInterval(() => { $('clock').textContent = new Date().toLocaleString('ja-JP', { timeZone:'Asia/Tokyo', hour:'2-digit',minute:'2-digit',hour12:false }) + ' JST'; }, 1000);

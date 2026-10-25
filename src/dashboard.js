@@ -18,8 +18,9 @@ export class Dashboard {
       mode: this.config.discordToken ? 'live' : 'setup',
       time: Date.now(),
       roles: roles.map(role => {
-        const status = { intake:['intake','waiting_info'], pm:['planning','decision'], lead:['queued'], integrator:['integrating'], release:['pr_ready'] }[role.id];
-        return { ...role, ticket: tickets.find(ticket => ticket.worker === role.id)?.title || tickets.find(ticket => status?.includes(ticket.status))?.title || (role.id === 'release' && this.engine.releasing ? 'PR を確認・マージ中' : '') };
+        const status = { pm:['planning','decision'], integrator:['integrating'], release:['pr_ready'] }[role.id];
+        const assigned = this.engine.roleBusy.get(role.id);
+        return { ...role, ticket: tickets.find(ticket => ticket.id === assigned || ticket.worker === role.id)?.title || tickets.find(ticket => status?.includes(ticket.status))?.title || (role.id === 'release' && this.engine.releasing ? 'PR を確認・マージ中' : '') };
       }),
       tickets,
       events: this.store.events(),

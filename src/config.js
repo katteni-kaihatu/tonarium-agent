@@ -3,13 +3,13 @@ import { resolve } from 'node:path';
 
 const number = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback;
 const nonNegativeNumber = (value, fallback) => value !== undefined && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : fallback;
+const namedPool = (prefix, names, job, color) => names.map((name,index) => ({id:index ? `${prefix}${index+1}` : prefix,name,job,color}));
 const defaultRoles = [
-  { id: 'intake', name: 'ひより', job: '聞き取り', color: 'mint' },
+  ...namedPool('intake',['ひより','こはる','みお','りん','ほのか'],'聞き取り','mint'),
   { id: 'pm', name: 'さくら', job: 'PM', color: 'rose' },
-  { id: 'lead', name: 'あおい', job: '開発リード', color: 'blue' },
-  { id: 'builder1', name: 'そら', job: '実装', color: 'blue' },
-  { id: 'builder2', name: 'ゆず', job: '実装', color: 'blue' },
-  { id: 'builder3', name: 'もも', job: '実装', color: 'blue' },
+  ...namedPool('lead',['あおい','かえで','まこと','なぎ','つばさ'],'開発リード','blue'),
+  ...['そら','ゆず','もも','はる','かなた','ふう','きい','あかり','ひなた','しおり','れん','さつき','いおり','みなと','こよみ'].map((name,index) => ({id:`builder${index+1}`,name,job:'実装',color:'blue'})),
+  { id: 'support', name: 'あん', job: '実装案内', color: 'mint' },
   { id: 'integrator', name: 'すず', job: '統合', color: 'violet' },
   { id: 'release', name: 'みのり', job: '出荷', color: 'gold' }
 ];
@@ -38,7 +38,7 @@ export function getConfig(env = process.env) {
     codexReasoning: env.CODEX_REASONING_EFFORT || 'medium',
     host: env.HOST || '127.0.0.1',
     port: number(env.PORT, 43879),
-    maxWorkers: Math.min(3, Math.max(1, number(env.MAX_WORKERS, 3))),
+    maxWorkers: Math.min(15, Math.max(1, number(env.MAX_WORKERS, 15))),
     batchMs: nonNegativeNumber(env.RELEASE_BATCH_MINUTES, 0) * 60_000,
     checksTimeoutMs: number(env.CHECKS_TIMEOUT_MINUTES || env.RELEASE_TIMEOUT_MINUTES, 20) * 60_000,
     requiredPrCheck: env.REQUIRED_PR_CHECK || 'web',

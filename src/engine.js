@@ -1,6 +1,7 @@
 import { roles } from './config.js';
 import { existsSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
+import { SnowflakeUtil } from 'discord.js';
 
 const roleName = id => roles.find(role => role.id === id)?.name || id;
 const asList = value => Array.isArray(value) ? value.map(String).filter(Boolean) : [];
@@ -12,6 +13,8 @@ export class Engine {
     this.active = new Set();
     this.pendingFeedback = new Set();
     this.busyWorkers = new Set();
+    this.roleBusy = new Map();
+    this.roleWaiters = new Map();
     this.releasing = false;
     this.lastReleaseAttempt = 0;
     this.timer = null;
@@ -20,25 +23,55 @@ export class Engine {
     this.store.event(id, roleName(actor), kind, text);
     this.onChange();
   }
+  async acquireRole(job, ticketId) {
+    const candidates = roles.filter(role => role.job === job);
+    if (!candidates.length) throw new Error(`No ${job} agent is configured`);
+    const free = candidates.find(role => !this.roleBusy.has(role.id));
+    if (!free) return new Promise(resolve => {
+      const queue = this.roleWaiters.get(job) || [];
+      queue.push({ ticketId, resolve });
+      this.roleWaiters.set(job,queue);
+    });
+    this.roleBusy.set(free.id,ticketId);
+    this.onChange();
+    return free;
+  }
+  releaseRole(role) {
+    const next = this.roleWaiters.get(role.job)?.shift();
+    if (next) {
+      this.roleBusy.set(role.id,next.ticketId);
+      next.resolve(role);
+    } else this.roleBusy.delete(role.id);
+    this.onChange();
+  }
   async start() {
     this.store.recover();
-    this.discord.onFeedback = id => this.feedback(id);
+    this.discord.onFeedback = id => this.receive(id);
     this.discord.onDecision = (id, text, author) => this.decision(id, text, author);
     if (!this.config.discordToken) return;
     await this.discord.start();
-    for (const ticket of this.store.list().filter(row => row.status === 'intake')) queueMicrotask(() => this.feedback(ticket.id));
+    for (const ticket of this.store.list().filter(row => row.status === 'intake')) queueMicrotask(() => this.receive(ticket.id));
+    for (const ticket of this.store.list().filter(row => ['merged','resolved_existing'].includes(row.status))) {
+      const completed = this.store.latestEvent(ticket.id,ticket.status === 'merged' ? 'merged' : 'existing');
+      if (ticket.last_message_id && ticket.last_message_id !== ticket.answered_message_id && completed && SnowflakeUtil.timestampFrom(ticket.last_message_id) > completed.created_at) queueMicrotask(() => this.receive(ticket.id));
+    }
     this.timer = setInterval(() => this.tick().catch(error => console.error('scheduler', error)), 15_000);
     await this.tick();
   }
   async stop() { clearInterval(this.timer); await this.discord.stop(); }
+  async receive(id) {
+    const status = this.store.get(id)?.status;
+    return ['merged','resolved_existing'].includes(status) ? this.followUp(id) : this.feedback(id);
+  }
   async feedback(id) {
     if (this.active.has(id)) { this.pendingFeedback.add(id); return; }
     this.active.add(id);
-    let snapshot;
+    let snapshot, intakeRole;
     try {
       const ticket = this.store.get(id);
       if (!ticket || !['intake','waiting_info','decision'].includes(ticket.status)) return;
       if (ticket.status === 'decision' && ticket.decision_thread_id) return;
+      intakeRole = await this.acquireRole('聞き取り',id);
       const baseSha = ticket.base_sha || await this.git.baseHead();
       if (!ticket.base_sha) this.store.update(id, { base_sha:baseSha });
       const history = await this.discord.history(id);
@@ -46,40 +79,74 @@ export class Engine {
       snapshot = await this.git.snapshotWorktree(`intake-${id}-${Date.now()}`,baseSha);
       const similar = this.store.list().filter(row => row.id !== id && !['grouped','failed','merged','resolved_existing'].includes(row.status)).slice(0,50)
         .map(row => ({ id:row.id,title:row.title,summary:row.summary,status:row.status }));
-      const result = await this.ai.ask(roleName('intake'), `Discord のフィードバックを聞き取る担当です。この作業コピーは発言時の ${this.config.baseBranch || 'main'} (${baseSha}) です。まず既存案件の似た声を探し、このリポジトリのコードと docs を読み、すでに実装済みの機能か調べてください。似た案件があれば duplicateOf にその正確な ID を入れます。既存機能で解決できるなら alreadyExists=true、evidencePath に確認したリポジトリ相対ファイルパスを入れ、使い方を reply で伝えます。機能が存在しても報告が不具合なら完了扱いにしません。断定できない場合は質問します。返す JSON: {"ready": boolean, "reply": "ユーザーへの自然な日本語の短い返信または質問", "title": "短い件名", "summary": "要約", "criteria": ["受け入れ条件"], "duplicateOf": "既存案件IDまたは空文字", "alreadyExists": boolean, "evidencePath": "リポジトリ相対パスまたは空文字"}。既出内容を繰り返して質問しないでください。\n\nスレッド名: ${ticket.title}\n${history}\n\n既存案件: ${JSON.stringify(similar)}`, { cwd: snapshot.path, repoReadOnly: true });
+      const result = await this.ai.ask(intakeRole.name, `Discord のフィードバックを聞き取る担当です。この作業コピーは発言時の ${this.config.baseBranch || 'main'} (${baseSha}) です。まず既存案件の似た声を探し、このリポジトリのコードと docs を読み、すでに実装済みの機能か調べてください。似た案件があれば duplicateOf にその正確な ID を入れます。既存機能で解決できるなら alreadyExists=true、evidencePath に確認したリポジトリ相対ファイルパスを入れ、使い方を reply で伝えます。機能が存在しても報告が不具合なら完了扱いにしません。断定できない場合は質問します。返す JSON: {"ready": boolean, "reply": "ユーザーへの自然な日本語の短い返信または質問", "title": "短い件名", "summary": "要約", "criteria": ["受け入れ条件"], "duplicateOf": "既存案件IDまたは空文字", "alreadyExists": boolean, "evidencePath": "リポジトリ相対パスまたは空文字"}。既出内容を繰り返して質問しないでください。\n\nスレッド名: ${ticket.title}\n${history}\n\n既存案件: ${JSON.stringify(similar)}`, { cwd: snapshot.path, repoReadOnly: true });
       const update = { title: trim(result.title || ticket.title, 100), summary: trim(result.summary, 3000), criteria: JSON.stringify(asList(result.criteria)) };
       this.store.update(id, update);
       const duplicate = similar.find(row => row.id === String(result.duplicateOf));
       if (duplicate) {
         this.store.update(id, { status:'grouped', parent_ticket_id:duplicate.id });
-        this.event(id,'intake','grouped',`${duplicate.title} と同じ要望としてまとめました`);
-        await this.discord.say(id, `**${roleName('intake')}｜聞き取り**\n${trim(result.reply || `「${duplicate.title}」と同じ方向の声としてまとめました。追加の観点も開発担当へ渡します。`)}`);
+        this.event(id,intakeRole.id,'grouped',`${duplicate.title} と同じ要望としてまとめました`);
+        await this.discord.say(id, `**${intakeRole.name}｜聞き取り**\n${trim(result.reply || `「${duplicate.title}」と同じ方向の声としてまとめました。追加の観点も開発担当へ渡します。`)}`);
         return;
       }
       const evidence = String(result.evidencePath || '').replace(/\\/g,'/');
       const evidenceFile = resolve(snapshot.path,evidence);
       const insideRepo = evidence && !isAbsolute(evidence) && !relative(snapshot.path,evidenceFile).startsWith('..');
       if (result.alreadyExists && insideRepo && existsSync(evidenceFile)) {
-        this.store.update(id, { status:'resolved_existing' });
-        this.event(id,'intake','existing',`既存機能で対応: ${evidence}`);
-        await this.discord.say(id, `**${roleName('intake')}｜聞き取り**\n${trim(result.reply || 'この機能はすでにあります。')}`);
+        this.store.update(id, { status:'resolved_existing', answered_message_id:this.store.get(id).last_message_id });
+        this.event(id,intakeRole.id,'existing',`既存機能で対応: ${evidence}`);
+        await this.discord.say(id, `**${intakeRole.name}｜聞き取り**\n${trim(result.reply || 'この機能はすでにあります。')}`);
         return;
       }
-      if (result.reply) await this.discord.say(id, `**${roleName('intake')}｜聞き取り**\n${trim(result.reply)}`);
+      if (result.reply) await this.discord.say(id, `**${intakeRole.name}｜聞き取り**\n${trim(result.reply)}`);
       if (!result.ready) {
         this.store.update(id, { status: 'waiting_info' });
-        this.event(id, 'intake', 'question', trim(result.reply || '追加情報を待っています'));
+        this.event(id, intakeRole.id, 'question', trim(result.reply || '追加情報を待っています'));
         return;
       }
       this.store.update(id, { status: 'planning' });
-      this.event(id, 'intake', 'ready', '実装に必要な情報が揃いました');
+      this.event(id, intakeRole.id, 'ready', '実装に必要な情報が揃いました');
       await this.plan(id, history);
-    } catch (error) { await this.fail(id, 'intake', error); }
+    } catch (error) { await this.fail(id, intakeRole?.id || 'intake', error); }
     finally {
       if (snapshot) await this.git.removeWorktree(snapshot.path);
+      if (intakeRole) this.releaseRole(intakeRole);
       this.active.delete(id);
       this.onChange();
-      if (this.pendingFeedback.delete(id)) queueMicrotask(() => this.feedback(id));
+      if (this.pendingFeedback.delete(id)) queueMicrotask(() => this.receive(id));
+    }
+  }
+  async followUp(id) {
+    if (this.active.has(id)) { this.pendingFeedback.add(id); return; }
+    this.active.add(id);
+    let snapshot, supportRole;
+    try {
+      const ticket = this.store.get(id);
+      if (!ticket || !['merged','resolved_existing'].includes(ticket.status)) return;
+      const messageId = ticket.last_message_id;
+      if (!messageId || messageId === ticket.answered_message_id) return;
+      supportRole = await this.acquireRole('実装案内',id);
+      const question = await this.discord.userMessage(id,messageId);
+      if (!question) return;
+      const history = await this.discord.history(id);
+      const mainSha = await this.git.baseHead();
+      snapshot = await this.git.snapshotWorktree(`support-${id}-${Date.now()}`,mainSha);
+      const pr = ticket.pr_number ? await this.git.prDetails(ticket.pr_number).catch(() => null) : null;
+      const result = await this.ai.ask(supportRole.name, `完了済みの Discord スレッドで、ユーザーが実装について質問しました。作業コピーの現在の main と関連 docs を読み、PR 情報も参考にして、実装の仕組みと数値・間隔を正確に説明してください。推測で断定せず、確認できたソースのパスを回答に含めてください。コード変更や新しいタスク化は不要です。最新の質問と、同時に送られた続きの発言をまとめて答えてください。返す JSON: {"answer":"日本語での分かりやすい回答"}。\n\n案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,pr:ticket.pr_number})}\nPR情報: ${JSON.stringify(pr)}\n最新の質問: ${JSON.stringify(question)}\n会話の文脈: ${history}`, {cwd:snapshot.path,repoReadOnly:true});
+      const answer = trim(result.answer,4000);
+      if (!answer) throw new Error('Implementation answer was empty');
+      await this.discord.say(id, `**${supportRole.name}｜実装案内**\n${answer}`);
+      this.store.update(id,{answered_message_id:messageId});
+      this.event(id,supportRole.id,'answered',trim(question,300));
+    } catch (error) {
+      this.event(id,supportRole?.id || 'support','answer_failed',trim(error.message,500));
+      await this.discord.say(id, `**${supportRole?.name || roleName('support')}｜実装案内**\n実装内容の確認中に問題が起きました。少し後で再度質問してください。`).catch(() => {});
+    } finally {
+      if (snapshot) await this.git.removeWorktree(snapshot.path);
+      if (supportRole) this.releaseRole(supportRole);
+      this.active.delete(id);
+      this.onChange();
+      if (this.pendingFeedback.delete(id)) queueMicrotask(() => this.receive(id));
     }
   }
   async plan(id, history, decisionAnswer = '') {
@@ -102,15 +169,18 @@ export class Engine {
       await this.askDecision(id, trim(result.decisionQuestion || 'この仕様をどう決めますか？'));
       return;
     }
-    const lead = await this.ai.ask(roleName('lead'), `開発リードとして作業範囲と受け入れ条件を確認してください。製品判断の不足があれば needsDecision=true。返す JSON: {"needsDecision": boolean, "decisionQuestion": "不足している判断", "task": "実装担当への明確な作業指示", "risk": "主な注意点"}。\n\n案件: ${JSON.stringify({title:result.title,summary,criteria,implementationTask:result.implementationTask,decisionAnswer})}`);
+    const leadRole = await this.acquireRole('開発リード',id);
+    let lead;
+    try { lead = await this.ai.ask(leadRole.name, `開発リードとして作業範囲と受け入れ条件を確認してください。製品判断の不足があれば needsDecision=true。返す JSON: {"needsDecision": boolean, "decisionQuestion": "不足している判断", "task": "実装担当への明確な作業指示", "risk": "主な注意点"}。\n\n案件: ${JSON.stringify({title:result.title,summary,criteria,implementationTask:result.implementationTask,decisionAnswer})}`);
+    } finally { this.releaseRole(leadRole); }
     if (lead.needsDecision) {
       await this.askDecision(id, trim(lead.decisionQuestion || '開発方針を確認してください'));
       return;
     }
     this.store.update(id, { status: 'queued', error: null });
     this.store.setKv(`task:${id}`, trim(lead.task || result.implementationTask || summary, 12000));
-    this.event(id, 'lead', 'queued', trim(lead.risk || '実装担当へ割り当て待ち', 500));
-    await this.discord.say(id, `**${roleName('lead')}｜開発リード**\n案件として受け付けました。${criteria.length ? `受け入れ条件: ${criteria.join(' / ')}` : ''}`);
+    this.event(id, leadRole.id, 'queued', trim(lead.risk || '実装担当へ割り当て待ち', 500));
+    await this.discord.say(id, `**${leadRole.name}｜開発リード**\n案件として受け付けました。${criteria.length ? `受け入れ条件: ${criteria.join(' / ')}` : ''}`);
     await this.tick();
   }
   async askDecision(id, question) {
@@ -154,12 +224,13 @@ export class Engine {
       await this.git.prepare();
       const baseSha = ticket.base_sha || await this.git.baseHead();
       if (!ticket.base_sha) this.store.update(id, { base_sha:baseSha });
-      const issue = await this.git.issue(ticket.title, `Discord feedback: ${await this.discord.url(id)}\nBase ${this.config.baseBranch || 'main'}: ${baseSha}\n\n${ticket.summary}\n\nAcceptance criteria:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}`).catch(error => { this.event(id,'pm','issue_warning',error.message); return null; });
+      const issue = ticket.issue_number || await this.git.issue(ticket.title, `Discord feedback: ${await this.discord.url(id)}\nBase ${this.config.baseBranch || 'main'}: ${baseSha}\n\n${ticket.summary}\n\nAcceptance criteria:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}`).catch(error => { this.event(id,'pm','issue_warning',error.message); return null; });
       if (issue) this.store.update(id, { issue_number: issue });
-      worktree = await this.git.worktree(`task-${id}-${Date.now()}`,baseSha);
+      worktree = await this.git.resumeTaskWorktree(id) || await this.git.worktree(`task-${id}-${Date.now()}`,baseSha);
+      if (worktree.resumed) this.event(id,worker.id,'resumed',`前回の作業ツリーから実装を再開: ${worktree.branch}`);
       const linked = this.store.list().filter(row => row.parent_ticket_id === id).map(row => row.summary);
       const task = `${this.store.getKv(`task:${id}`) || ticket.summary}\n\n受け入れ条件:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}\n\n追加の声:\n${linked.join('\n')}`;
-      const report = await this.ai.code(worker.name, task, worktree.path);
+      const report = await this.ai.code(worker.name, `${worktree.resumed ? '前回の未完了の差分が作業ツリーにあります。最初に git status と差分を読み、既存の変更を引き継いで完成させてください。\n\n' : ''}${task}`, worktree.path);
       if (/NEEDS_CLARIFICATION/i.test(report)) {
         this.store.update(id, { status: 'waiting_info', worker: null });
         await this.discord.say(id, `**${worker.name}｜実装**\n追加確認が必要です。${trim(report, 1200)}`);
@@ -243,7 +314,7 @@ export class Engine {
     }
   }
   async markMerged(ticket,sha) {
-    this.store.update(ticket.id, { status:'merged' });
+    this.store.update(ticket.id, { status:'merged', answered_message_id:this.store.get(ticket.id).last_message_id });
     this.event(ticket.id,'release','merged',`PR #${ticket.pr_number} を ${this.config.baseBranch || 'main'} へマージ: ${sha?.slice(0,8) || ''}`);
     if (ticket.issue_number) await this.git.closeIssue(ticket.issue_number, `PR #${ticket.pr_number} merged into ${this.config.baseBranch || 'main'}`).catch(error => this.event(ticket.id,'release','issue_warning',error.message));
     await this.discord.say(ticket.id, `**${roleName('release')}｜出荷**\nPR #${ticket.pr_number} のチェックを確認し、${this.config.baseBranch || 'main'} にマージしました。${sha ? `\nマージ commit: ${sha.slice(0,8)}` : ''}`).catch(error => this.event(ticket.id,'release','discord_warning',error.message));

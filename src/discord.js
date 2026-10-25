@@ -87,6 +87,12 @@ export class DiscordTransport {
     if (starter) this.seedMessages.delete(threadId);
     return history || this.seedMessages.get(threadId) || '';
   }
+  async userMessage(threadId, messageId) {
+    const thread = await this.client.channels.fetch(threadId);
+    const message = await thread.messages.fetch(messageId).catch(() => null) || await thread.fetchStarterMessage().catch(() => null);
+    if (!message || message.id !== messageId || message.author.bot) return '';
+    return `${message.author.username}: ${message.content || '[添付のみ]'}`;
+  }
   async sendRaw(threadId, text) {
     if (!this.config.discordToken) return;
     const thread = await this.client.channels.fetch(threadId);

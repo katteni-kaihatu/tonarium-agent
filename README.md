@@ -1,29 +1,33 @@
 # Tonarium Agent Studio
 
-Discord の声を聞き取り、GitHub PR の作成・チェック・`main` へのマージまで進める常駐エージェントです。対象は `.env` の `DISCORD_CHANNEL_ID` で指定した通常のテキストチャンネルです。親チャンネルへ発言すると Bot がそのメッセージから公開スレッドを作り、ひよりが詳細を聞きます。ユーザーが手動で作ったスレッドも受け付けます。
+Discord の声を聞き取り、GitHub PR の作成・チェック・`main` へのマージまで進める常駐エージェントです。対象は `.env` の `DISCORD_CHANNEL_ID` で指定した通常のテキストチャンネルです。親チャンネルへ発言すると Bot がそのメッセージから公開スレッドを作り、空いている聞き取り担当が詳細を聞きます。ユーザーが手動で作ったスレッドも受け付けます。
 
 Tonarium リポジトリの既定ブランチ名は `master` ではなく **`main`** です。案件ごとに最初の発言を受けた時点の `main` commit を保存し、その commit の worktree で既存機能を調べ、実装します。後から `main` が進んでも、最初の判断に使ったコードは変わりません。
 
 ```mermaid
 flowchart LR
   Voice[親チャンネルの発言] --> Thread[Bot がスレッドを作る]
-  Thread --> H[ひより / 聞き取り・重複と既存機能の確認]
+  Thread --> H[聞き取り 5人 / 重複と既存機能の確認]
   H --> S[さくら / PM]
   S -->|製品判断が必要| Forum[判断用フォーラム]
   Forum --> S
-  S --> A[あおい / 開発リード]
-  A --> Workers[そら・ゆず・もも / 並列 worktree]
+  S --> A[開発リード 5人]
+  A --> Workers[実装 15人 / 並列 worktree]
   Workers --> PR[main 宛ての PR]
   PR --> I[すず / 最新 main との統合・競合解決・テスト]
   I --> M[みのり / GitHub チェック確認・PR マージ]
   M --> Main[main]
+  Main --> Q[完了後のスレッドで実装質問]
+  Q --> Help[あん / 現在のコードと PR を調べて回答]
 ```
 
 似た声は既存案件にまとめます。リポジトリの実ファイルを確認できる既存機能は使い方を返信して閉じます。製品判断が必要な案件だけ判断用フォーラムに投稿します。フォーラム ID が未設定の場合は元のスレッドで質問します。
 
-ユーザーの発言と Bot の返答は、同じスレッドに **日本語・英語・韓国語**を併記します。元の発言は消しません。判断用フォーラムの会話も翻訳します。翻訳が失敗しても元の発言の聞き取りは続けます。
+ユーザーの発言と Bot の返答は、同じスレッドに **日本語・英語・韓国語**を併記します。元の発言は消しません。判断用フォーラムの会話も翻訳します。翻訳が失敗しても元の発言の聞き取りは続けます。マージ後や既存機能の案内後も同じスレッドで質問できます。実装案内の「あん」が PR と現在のコードを確認して答え、案件は完了状態のままです。
 
-実装担当は最大 3 件を並列処理します。各案件で `npm ci`、`npm run typecheck`、`npm run build`、`npm run test:client`、`npm run test:sync` を通してから PR を作ります。すずは PR ブランチへ最新 `main` を取り込み、競合を解決し、統合状態で同じチェックを実行します。みのりは GitHub の Web チェックの成功を待ち、PR の head commit を確認して `main` にマージします。チェックが現れない場合もマージしません。複数 PR は一件ずつ最新 `main` へ合わせます。
+Bot が停止していた間に完了済みスレッドへ届いた質問も、再起動時に完了時刻と最終発言を比べて拾います。個別のスレッドで実装案内をすぐ動かすには `npm run answer:thread -- <Discord スレッド ID>` を使います。
+
+実装担当は最大 15 件を並列処理します。各案件で `npm ci`、`npm run typecheck`、`npm run build`、`npm run test:client`、`npm run test:sync` を通してから PR を作ります。すずは PR ブランチへ最新 `main` を取り込み、競合を解決し、統合状態で同じチェックを実行します。みのりは GitHub の Web チェックの成功を待ち、PR の head commit を確認して `main` にマージします。チェックが現れない場合もマージしません。複数 PR は一件ずつ最新 `main` へ合わせます。
 
 ## セットアップ
 
@@ -54,10 +58,12 @@ npm start
 | `TRANSLATION_PROVIDER` | 既定は `claude`（サブスク）。`openai` を選ぶと翻訳だけ OpenAI API を使う。 |
 | `TRANSLATION_MODEL` | OpenAI API 翻訳時のモデル。既定は `gpt-6-luna`。 |
 | `OPENAI_API_KEY` | `TRANSLATION_PROVIDER=openai` の場合だけ必要。Codex の聞き取り・実装には渡さない。 |
+| `MAX_WORKERS` | 同時に動く実装担当の上限。既定 `15`。聞き取りとリードは各5人。 |
 | `RELEASE_BATCH_MINUTES` | PR をまとめる待ち時間。既定 `0`（準備完了後、次の15秒巡回で出荷開始）。 |
 | `REQUIRED_PR_CHECK` | GitHub で成功を待つチェック名。既定 `web`。 |
+| `AUTO_RELEASE` | Bot 内蔵の出荷巡回。独立した `TonariumAgentRelease` を使う構成では `false`。 |
 
-すでに出荷待ちの PR を即時処理する場合は、Bot を止めずに `npm run release:ready` を実行できます。出荷担当が最新 `main` への統合、ローカルテスト、GitHub チェック、PR マージを順番に行います。
+独立した出荷タスクが15秒ごとに出荷待ちの PR を確認します。すでに出荷待ちの PR を手動で即時処理する場合は `npm run release:ready` を実行できます。出荷担当が最新 `main` への統合、ローカルテスト、GitHub チェック、PR マージを順番に行います。
 
 Bot には対象チャンネルで **View Channel、Read Message History、Create Public Threads、Send Messages in Threads** を与えてください。判断用フォーラムを使う場合は投稿権限も必要です。Message Content Intent の詳細は [Discord の公式資料](https://github.com/discord/discord-api-docs/blob/main/developers/events/gateway.mdx) を参照してください。
 
@@ -74,8 +80,10 @@ Windows ログオン時の起動タスクは `.env` を設定した後に登録�
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install-startup-task.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\install-public-tunnel-task.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\install-release-task.ps1
 Start-ScheduledTask -TaskName TonariumAgent
 Start-ScheduledTask -TaskName TonariumAgentTunnel
+Start-ScheduledTask -TaskName TonariumAgentRelease
 ```
 
-`.data/state.sqlite` に案件、受信時の `main` commit、出荷履歴を保存します。`.worktrees/` は一時的な作業コピーです。これらと `.env` は Git に含めません。
+`.data/state.sqlite` に案件、受信時の `main` commit、出荷履歴を保存します。`.worktrees/` は作業コピーです。実装中に Bot が再起動した場合は残った作業コピーと GitHub Issue を再利用します。これらと `.env` は Git に含めません。

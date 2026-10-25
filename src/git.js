@@ -1,4 +1,4 @@
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { command } from './command.js';
 
@@ -23,6 +23,17 @@ export class GitHub {
     const branch = `agent/${name.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
     await this.git(['worktree','add','-b',branch,path,base]);
     return { path, branch };
+  }
+  async resumeTaskWorktree(id) {
+    const prefix = `task-${String(id).replace(/[^a-zA-Z0-9_-]/g, '-')}-`;
+    const entries = await readdir(this.worktrees,{withFileTypes:true}).catch(() => []);
+    const names = entries.filter(entry => entry.isDirectory() && entry.name.startsWith(prefix)).map(entry => entry.name).sort().reverse();
+    for (const name of names) {
+      const path = join(this.worktrees,name);
+      const valid = await this.git(['rev-parse','--is-inside-work-tree'],path).catch(() => null);
+      if (valid?.stdout === 'true') return {path,branch:`agent/${name}`,resumed:true};
+    }
+    return null;
   }
   async snapshotWorktree(name, sha) {
     await mkdir(this.worktrees, { recursive: true });
@@ -70,6 +81,11 @@ export class GitHub {
   async prInfo(number) {
     const result = await this.gh(['pr','view',String(number),'--repo',this.config.githubRepo,'--json','state,headRefOid,baseRefName,statusCheckRollup,mergeCommit']);
     return JSON.parse(result.stdout);
+  }
+  async prDetails(number) {
+    const result = await this.gh(['pr','view',String(number),'--repo',this.config.githubRepo,'--json','title,body,files,mergeCommit']);
+    const info = JSON.parse(result.stdout);
+    return {title:info.title,body:info.body,mergeCommit:info.mergeCommit?.oid,files:(info.files || []).map(file => file.path)};
   }
   async waitForChecks(number, expectedHead) {
     const deadline = Date.now() + (this.config.checksTimeoutMs || 20 * 60_000);

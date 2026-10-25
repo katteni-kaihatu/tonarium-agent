@@ -1,5 +1,6 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { open, readFile, rm, stat } from 'node:fs/promises';
 import { REST, Routes } from 'discord.js';
 import { getConfig } from './config.js';
 import { Store } from './store.js';
@@ -11,6 +12,32 @@ import { Engine } from './engine.js';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const config = getConfig();
 const store = new Store(join(root,'.data','state.sqlite'));
+const lockPath = join(root,'.data','release.lock');
+async function acquireLock() {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const handle = await open(lockPath,'wx');
+      await handle.writeFile(String(process.pid));
+      return handle;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const age = Date.now() - (await stat(lockPath)).mtimeMs;
+      if (age < 10_000) return null;
+      let alive = false;
+      try { process.kill(Number(await readFile(lockPath,'utf8')),0); alive = true; }
+      catch (checkError) { alive = checkError.code === 'EPERM'; }
+      if (alive) return null;
+      await rm(lockPath,{force:true});
+    }
+  }
+  return null;
+}
+const lock = await acquireLock();
+if (!lock) {
+  console.log('Another release is already running.');
+  store.close();
+  process.exit(0);
+}
 const ai = new AI(config);
 const git = new GitHub(config,root);
 const translator = new Translator(config,ai,root);
@@ -38,4 +65,4 @@ try {
     console.log(`Release ${latest?.id || ''}: ${latest?.status || (success ? 'merged' : 'failed')}`);
     if (!success) process.exitCode = 1;
   }
-} finally { store.close(); }
+} finally { store.close(); await lock.close(); await rm(lockPath,{force:true}); }
