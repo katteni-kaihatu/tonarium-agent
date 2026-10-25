@@ -13,7 +13,7 @@ const checks = [
   ['GitHub release branch', Boolean(config.baseBranch), config.baseBranch]
 ];
 if (config.translationProvider === 'openai') checks.push(['OpenAI translation key',Boolean(config.translationApiKey),'OPENAI_API_KEY']);
-for (const executable of [...new Set(['git','gh',config.planningProvider,config.codingProvider,config.integrationProvider].filter(x => x !== 'codex'))]) {
+for (const executable of [...new Set(['git','gh',config.intakeProvider,config.planningProvider,config.codingProvider,config.integrationProvider].filter(x => x !== 'codex'))]) {
   try { await command(executable,['--version'],{timeoutMs:10_000}); checks.push([`${executable} CLI`,true,'found']); }
   catch { checks.push([`${executable} CLI`,false,'not found or not executable']); }
 }

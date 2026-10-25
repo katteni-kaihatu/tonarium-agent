@@ -26,6 +26,7 @@ export function getConfig(env = process.env) {
     repo: resolve(env.TONARIUM_REPO || 'C:/Users/neo/GitHub/tonarium-prototype'),
     githubRepo: env.GITHUB_REPO || 'katteni-kaihatu/tonarium-prototype',
     baseBranch: env.RELEASE_BRANCH || 'main',
+    intakeProvider: env.INTAKE_PROVIDER || 'codex',
     planningProvider: env.PLANNING_PROVIDER || 'claude',
     codingProvider: env.CODING_PROVIDER || 'codex',
     integrationProvider: env.INTEGRATION_PROVIDER || 'codex',

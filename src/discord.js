@@ -1,4 +1,7 @@
 import { Client, GatewayIntentBits, ChannelType, escapeMarkdown } from 'discord.js';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 function chunk(text, limit = 1900) {
   const result = [];
@@ -7,10 +10,11 @@ function chunk(text, limit = 1900) {
 }
 
 export class DiscordTransport {
-  constructor(config, store, translator = null) {
+  constructor(config, store, translator = null, fetcher = fetch) {
     this.config = config;
     this.store = store;
     this.translator = translator;
+    this.fetcher = fetcher;
     this.client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
     this.onFeedback = null;
     this.onDecision = null;
@@ -86,6 +90,35 @@ export class DiscordTransport {
       .map(message => `${message.author.username}: ${message.content || '[添付のみ]'}${message.attachments.size ? ` [添付: ${[...message.attachments.values()].map(x => x.url).join(', ')}]` : ''}`).join('\n').slice(-20_000);
     if (starter) this.seedMessages.delete(threadId);
     return history || this.seedMessages.get(threadId) || '';
+  }
+  async downloadImages(threadId) {
+    const thread = await this.client.channels.fetch(threadId);
+    const messages = await thread.messages.fetch({limit:100});
+    const starter = await thread.fetchStarterMessage().catch(() => null);
+    if (starter) messages.set(starter.id,starter);
+    const attachments = [...messages.values()].filter(message => !message.author.bot).sort((a,b) => b.createdTimestamp-a.createdTimestamp)
+      .flatMap(message => [...message.attachments.values()]).filter(attachment => attachment.size <= 10 * 1024 * 1024 &&
+        (/^image\/(png|jpeg)$/i.test(attachment.contentType || '') || /\.(png|jpe?g)(?:\?|$)/i.test(attachment.url))).slice(0,4);
+    if (!attachments.length) return {paths:[],cleanup:async () => {}};
+    const dir = await mkdtemp(join(tmpdir(),'tonarium-feedback-images-'));
+    const paths = [];
+    for (const attachment of attachments) {
+      try {
+        const url = new URL(attachment.url);
+        if (url.protocol !== 'https:' || !['cdn.discordapp.com','media.discordapp.net'].includes(url.hostname)) continue;
+        const response = await this.fetcher(url,{signal:AbortSignal.timeout(15_000)});
+        if (!response.ok || Number(response.headers.get('content-length') || 0) > 10 * 1024 * 1024) continue;
+        const bytes = Buffer.from(await response.arrayBuffer());
+        if (bytes.length > 10 * 1024 * 1024) continue;
+        const png = bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
+        const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+        if (!png && !jpeg) continue;
+        const path = join(dir,`image-${paths.length+1}.${png ? 'png' : 'jpg'}`);
+        await writeFile(path,bytes);
+        paths.push(path);
+      } catch (error) { console.error('Could not fetch Discord image:',error.message); }
+    }
+    return {paths,cleanup:() => rm(dir,{recursive:true,force:true})};
   }
   async userMessage(threadId, messageId) {
     const thread = await this.client.channels.fetch(threadId);

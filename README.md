@@ -23,6 +23,8 @@ flowchart LR
 
 似た声は既存案件にまとめます。リポジトリの実ファイルを確認できる既存機能は使い方を返信して閉じます。製品判断が必要な案件だけ判断用フォーラムに投稿します。フォーラム ID が未設定の場合は元のスレッドで質問します。
 
+聞き取り担当は Codex のサブスクログインを使います。Discord のスレッドに添付された PNG・JPEG 画像を新しい順に最大4枚、各10 MiBまで一時取得し、`codex exec --image` の視覚入力として渡します。処理後に一時ファイルを消します。対応外の形式や取得できない画像は URL を会話履歴に残し、画像内容を確認したものとしては扱いません。画像入力の方法は [公式 OpenAI Docs](https://learn.chatgpt.com/docs/image-inputs?surface=cli) に従っています。
+
 ユーザーの発言と Bot の返答は、同じスレッドに **日本語・英語・韓国語**を併記します。元の発言は消しません。判断用フォーラムの会話も翻訳します。翻訳が失敗しても元の発言の聞き取りは続けます。マージ後や既存機能の案内後も同じスレッドで質問できます。実装案内の「あん」が PR と現在のコードを確認して答え、案件は完了状態のままです。
 
 Bot が停止していた間に完了済みスレッドへ届いた質問も、再起動時に完了時刻と最終発言を比べて拾います。個別のスレッドで実装案内をすぐ動かすには `npm run answer:thread -- <Discord スレッド ID>` を使います。
@@ -52,7 +54,8 @@ npm start
 | `TONARIUM_REPO` | Tonarium の既存 checkout。初期値 `C:\Users\neo\GitHub\tonarium-prototype`。 |
 | `GITHUB_REPO` | `katteni-kaihatu/tonarium-prototype`。`gh auth login` の書き込み権限が必要。 |
 | `RELEASE_BRANCH` | `main`。 |
-| `PLANNING_PROVIDER` | 聞き取り・PM・リード・出荷に使う `claude` または `codex`。 |
+| `INTAKE_PROVIDER` | 聞き取り5人に使う `codex` または `claude`。既定 `codex`。 |
+| `PLANNING_PROVIDER` | PM・リード・出荷・実装案内に使う `claude` または `codex`。 |
 | `CODING_PROVIDER` / `INTEGRATION_PROVIDER` | 実装・競合解決に使う `codex` または `claude`。 |
 | `CODEX_MODEL` / `CODEX_SPEED` | 既定は `gpt-6.1-sol` / `fast`。この PC でサブスクログインによる応答を確認済み。 |
 | `TRANSLATION_PROVIDER` | 既定は `claude`（サブスク）。`openai` を選ぶと翻訳だけ OpenAI API を使う。 |

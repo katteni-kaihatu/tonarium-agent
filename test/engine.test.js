@@ -22,12 +22,20 @@ test('intake recognizes an existing feature only with a real repository file', a
   try {
     writeFileSync(join(f.dir,'feature.md'),'Existing feature');
     f.store.create('feedback','この機能はありますか');
-    f.engine.ai = { ask: async () => ({ alreadyExists:true, evidencePath:'feature.md', reply:'設定から使えます。', title:'機能', summary:'使い方', criteria:[] }) };
+    f.engine.config.intakeProvider = 'codex';
+    let cleaned = false;
+    f.engine.discord.downloadImages = async () => ({paths:['C:/feedback/screenshot.png'],cleanup:async () => { cleaned = true; }});
+    f.engine.ai = { ask: async (_role,_prompt,options) => {
+      assert.equal(options.provider,'codex');
+      assert.deepEqual(options.images,['C:/feedback/screenshot.png']);
+      return { alreadyExists:true, evidencePath:'feature.md', reply:'設定から使えます。', title:'機能', summary:'使い方', criteria:[] };
+    } };
     await f.engine.feedback('feedback');
     assert.equal(f.store.get('feedback').status,'resolved_existing');
     assert.equal(f.store.get('feedback').base_sha,'base-123');
     assert.equal(f.store.events()[0].kind,'existing');
     assert.match(f.sent[0].text,/設定から使えます/);
+    assert.equal(cleaned,true);
   } finally { f.close(); }
 });
 

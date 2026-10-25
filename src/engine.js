@@ -66,7 +66,7 @@ export class Engine {
   async feedback(id) {
     if (this.active.has(id)) { this.pendingFeedback.add(id); return; }
     this.active.add(id);
-    let snapshot, intakeRole;
+    let snapshot, intakeRole, imageBundle;
     try {
       const ticket = this.store.get(id);
       if (!ticket || !['intake','waiting_info','decision'].includes(ticket.status)) return;
@@ -77,9 +77,11 @@ export class Engine {
       const history = await this.discord.history(id);
       if (!history.trim()) return;
       snapshot = await this.git.snapshotWorktree(`intake-${id}-${Date.now()}`,baseSha);
+      try { imageBundle = await this.discord.downloadImages?.(id); }
+      catch (error) { this.event(id,intakeRole.id,'image_warning',trim(error.message,300)); }
       const similar = this.store.list().filter(row => row.id !== id && !['grouped','failed','merged','resolved_existing'].includes(row.status)).slice(0,50)
         .map(row => ({ id:row.id,title:row.title,summary:row.summary,status:row.status }));
-      const result = await this.ai.ask(intakeRole.name, `Discord のフィードバックを聞き取る担当です。この作業コピーは発言時の ${this.config.baseBranch || 'main'} (${baseSha}) です。まず既存案件の似た声を探し、このリポジトリのコードと docs を読み、すでに実装済みの機能か調べてください。似た案件があれば duplicateOf にその正確な ID を入れます。既存機能で解決できるなら alreadyExists=true、evidencePath に確認したリポジトリ相対ファイルパスを入れ、使い方を reply で伝えます。機能が存在しても報告が不具合なら完了扱いにしません。断定できない場合は質問します。返す JSON: {"ready": boolean, "reply": "ユーザーへの自然な日本語の短い返信または質問", "title": "短い件名", "summary": "要約", "criteria": ["受け入れ条件"], "duplicateOf": "既存案件IDまたは空文字", "alreadyExists": boolean, "evidencePath": "リポジトリ相対パスまたは空文字"}。既出内容を繰り返して質問しないでください。\n\nスレッド名: ${ticket.title}\n${history}\n\n既存案件: ${JSON.stringify(similar)}`, { cwd: snapshot.path, repoReadOnly: true });
+      const result = await this.ai.ask(intakeRole.name, `Discord のフィードバックを聞き取る担当です。この作業コピーは発言時の ${this.config.baseBranch || 'main'} (${baseSha}) です。まず既存案件の似た声を探し、このリポジトリのコードと docs を読み、すでに実装済みの機能か調べてください。似た案件があれば duplicateOf にその正確な ID を入れます。既存機能で解決できるなら alreadyExists=true、evidencePath に確認したリポジトリ相対ファイルパスを入れ、使い方を reply で伝えます。機能が存在しても報告が不具合なら完了扱いにしません。断定できない場合は質問します。返す JSON: {"ready": boolean, "reply": "ユーザーへの自然な日本語の短い返信または質問", "title": "短い件名", "summary": "要約", "criteria": ["受け入れ条件"], "duplicateOf": "既存案件IDまたは空文字", "alreadyExists": boolean, "evidencePath": "リポジトリ相対パスまたは空文字"}。既出内容を繰り返して質問しないでください。\n\nスレッド名: ${ticket.title}\n${history}\n\n既存案件: ${JSON.stringify(similar)}`, { provider: this.config.intakeProvider, cwd: snapshot.path, repoReadOnly: true, images: imageBundle?.paths || [] });
       const update = { title: trim(result.title || ticket.title, 100), summary: trim(result.summary, 3000), criteria: JSON.stringify(asList(result.criteria)) };
       this.store.update(id, update);
       const duplicate = similar.find(row => row.id === String(result.duplicateOf));
@@ -109,6 +111,7 @@ export class Engine {
       await this.plan(id, history);
     } catch (error) { await this.fail(id, intakeRole?.id || 'intake', error); }
     finally {
+      if (imageBundle) await imageBundle.cleanup().catch(error => console.error('Could not clean up feedback images:',error));
       if (snapshot) await this.git.removeWorktree(snapshot.path);
       if (intakeRole) this.releaseRole(intakeRole);
       this.active.delete(id);
