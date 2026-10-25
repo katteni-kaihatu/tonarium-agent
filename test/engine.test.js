@@ -17,6 +17,25 @@ function fixture() {
   return { store, sent, engine, dir, close: () => { store.close(); rmSync(dir,{recursive:true,force:true}); } };
 }
 
+test('Discord thread status updates stay in event order', async () => {
+  const f = fixture();
+  try {
+    const started = [];
+    let finishFirst;
+    f.engine.discord.setThreadStatus = async (_id,emoji) => {
+      started.push(emoji);
+      if (emoji === '🔀') await new Promise(resolve => { finishFirst = resolve; });
+    };
+    f.engine.event('ticket','release','integrating','統合中');
+    f.engine.event('ticket','release','merged','マージ済み');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(started,['🔀']);
+    finishFirst();
+    await f.engine.threadStatusUpdates.get('ticket');
+    assert.deepEqual(started,['🔀','✅']);
+  } finally { f.close(); }
+});
+
 test('intake recognizes an existing feature only with a real repository file', async () => {
   const f = fixture();
   try {
