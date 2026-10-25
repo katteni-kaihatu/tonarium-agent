@@ -295,13 +295,13 @@ export class Engine {
   }
   async release(force = false) {
     if (this.releasing) return false;
-    const ready = this.store.list().filter(row => row.status === 'pr_ready' && row.branch && row.pr_number);
+    const ready = this.store.list().filter(row => row.status === 'pr_ready' && row.branch && row.pr_number && Date.now() >= Number(this.store.getKv(`release-retry-after:${row.id}`) || 0)).sort((a,b) => a.updated_at - b.updated_at);
     if (!ready.length) return false;
     if (!force && Date.now() - Math.min(...ready.map(row => row.updated_at)) < this.config.batchMs) return false;
     this.releasing = true;
     this.lastReleaseAttempt = Date.now();
     const releaseId = this.store.release('integrating', ready.map(row => row.id));
-    let merged = 0;
+    let merged = 0, failedTickets = 0;
     let finalSha = '';
     try {
       const selection = await this.ai.ask(roleName('release'), `出荷担当として今回 ${this.config.baseBranch || 'main'} にマージする PR を選んでください。既定では全部処理します。依存関係の理由で除外するものだけ省いてください。返す JSON: {"selectedIds": ["ticket id"], "notes": "短いマージ説明"}。\n\n候補: ${JSON.stringify(ready.map(x => ({id:x.id,title:x.title,summary:x.summary,pr:x.pr_number})))}`);
@@ -342,7 +342,7 @@ export class Engine {
             await this.git.git(['commit','-m',`docs: record ${ticket.title}`.slice(0,100)],worktree.path);
             this.event(ticket.id,'integrator','changelog_fixed',trim(report,300));
           }
-          await this.git.test(worktree.path);
+          await this.testAndRepairIntegration(ticket,worktree.path);
           const head = await this.git.pushBranch(worktree.path,ticket.branch);
           this.event(ticket.id,'integrator','verified',`最新 ${this.config.baseBranch || 'main'} と統合した状態でテスト完了: ${head.slice(0,8)}`);
           const checks = await this.git.waitForChecks(ticket.pr_number,head);
@@ -352,14 +352,19 @@ export class Engine {
           finalSha = mergeSha || await this.git.baseHead();
           await this.markMerged(ticket,finalSha);
           merged++;
+        } catch (error) {
+          failedTickets++;
+          this.store.update(ticket.id,{status:'pr_ready',error:trim(error.message,2000)});
+          this.store.setKv(`release-retry-after:${ticket.id}`,Date.now() + 90_000);
+          this.event(ticket.id,'release','release_retry',`この PR は90秒後に再試行します。ほかの PR を先に処理します: ${trim(error.message,500)}`);
         } finally {
           if (worktree) await this.git.removeWorktree(worktree.path);
         }
       }
       finalSha = await this.git.baseHead();
-      this.store.updateRelease(releaseId, { status: 'merged', commit_sha:finalSha, url:`https://github.com/${this.config.githubRepo}/tree/${this.config.baseBranch || 'main'}` });
+      this.store.updateRelease(releaseId, { status: failedTickets ? merged ? 'partial' : 'failed' : 'merged', commit_sha:finalSha, url:`https://github.com/${this.config.githubRepo}/tree/${this.config.baseBranch || 'main'}` });
       this.lastReleaseAttempt = 0;
-      return true;
+      return merged > 0;
     } catch (error) {
       this.store.updateRelease(releaseId, { status: merged ? 'partial' : 'failed', commit_sha:finalSha || null, error: trim(error.message, 2000) });
       for (const ticket of ready) if (this.store.get(ticket.id)?.status === 'integrating') this.store.update(ticket.id, { status: 'pr_ready' });
@@ -368,6 +373,27 @@ export class Engine {
     } finally {
       this.releasing = false;
       this.onChange();
+    }
+  }
+  async testAndRepairIntegration(ticket,path) {
+    let repaired = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await this.git.test(path);
+        if (repaired) {
+          await this.git.git(['add','-A'],path);
+          await this.git.git(['commit','-m',`fix: integrate ${ticket.title}`.slice(0,100)],path);
+        }
+        return;
+      } catch (error) {
+        if (attempt === 2) throw error;
+        this.event(ticket.id,'pm','repair_requested',`統合後の検証失敗を修正 (${attempt + 1}/2): ${trim(error.message,400)}`);
+        const report = await this.ai.code(roleName('integrator'), `最新 main と PR の統合後、検証に失敗しました。現在の作業ツリーの差分を保持し、次のエラーを修正してください。git add/commit/push は行わないでください。案件: ${ticket.title}。エラー: ${trim(error.message,1500)}`, path, {provider:this.config.integrationProvider,requireChangelog:false,timeoutMs:15*60_000});
+        const status = await this.git.git(['status','--porcelain'],path);
+        if (!status.stdout) throw new Error('Integrator made no changes to repair the failed check');
+        this.event(ticket.id,'integrator','repair_applied',trim(report,300));
+        repaired = true;
+      }
     }
   }
   async markMerged(ticket,sha) {

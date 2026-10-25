@@ -158,6 +158,38 @@ test('release retries when main advances while PR checks run', async () => {
   } finally { f.close(); }
 });
 
+test('a failing PR does not prevent another ready PR from merging', async () => {
+  const f = fixture();
+  try {
+    f.store.create('first','型エラーのある変更');
+    f.store.update('first',{status:'pr_ready',branch:'agent/first',pr_number:117});
+    f.store.create('second','通過できる変更');
+    f.store.update('second',{status:'pr_ready',branch:'agent/second',pr_number:116});
+    f.engine.config = {baseBranch:'main',githubRepo:'owner/repo',batchMs:0};
+    f.engine.ai = {ask:async () => ({selectedIds:['first','second'],notes:''})};
+    f.engine.testAndRepairIntegration = async ticket => {
+      if (ticket.id === 'first') throw new Error('typecheck failed: EYE is undefined');
+    };
+    let merged = false;
+    f.engine.git = {
+      prInfo:async () => ({state:'OPEN'}),
+      baseHead:async () => merged ? 'merge-sha' : 'base-sha',
+      git:async () => ({stdout:''}),
+      worktree:async name => ({path:name}),
+      mergeMainInto:async () => {},
+      pushBranch:async () => 'head-sha',
+      waitForChecks:async () => 1,
+      mergePr:async () => { merged = true; return 'merge-sha'; },
+      removeWorktree:async () => {}
+    };
+    assert.equal(await f.engine.release(true),true);
+    assert.equal(f.store.get('first').status,'pr_ready');
+    assert.equal(f.store.get('second').status,'merged');
+    assert.equal(f.store.releases()[0].status,'partial');
+    assert.ok(Number(f.store.getKv('release-retry-after:first')) > Date.now());
+  } finally { f.close(); }
+});
+
 test('scheduler starts release on the next tick when batching is zero', async () => {
   const f = fixture();
   try {
