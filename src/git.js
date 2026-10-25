@@ -110,8 +110,15 @@ export class GitHub {
     }
   }
   async prInfo(number) {
-    const result = await this.gh(['pr','view',String(number),'--repo',this.config.githubRepo,'--json','state,headRefOid,baseRefName,statusCheckRollup,mergeCommit']);
+    const result = await this.gh(['pr','view',String(number),'--repo',this.config.githubRepo,'--json','state,headRefOid,headRefName,baseRefName,statusCheckRollup,mergeCommit']);
     return JSON.parse(result.stdout);
+  }
+  async checkRunsForCommit(sha) {
+    const result = await this.gh(['api',`repos/${this.config.githubRepo}/commits/${sha}/check-runs`]);
+    return (JSON.parse(result.stdout).check_runs || []).map(run => ({name:run.name,conclusion:run.conclusion,state:run.status}));
+  }
+  async triggerWebCheck(branch) {
+    await this.gh(['workflow','run','web-checks.yml','--repo',this.config.githubRepo,'--ref',branch]);
   }
   async prDetails(number) {
     const result = await this.gh(['pr','view',String(number),'--repo',this.config.githubRepo,'--json','title,body,files,mergeCommit']);
@@ -120,7 +127,9 @@ export class GitHub {
   }
   async waitForChecks(number, expectedHead) {
     const deadline = Date.now() + (this.config.checksTimeoutMs || 20 * 60_000);
+    const started = Date.now();
     let seenExpectedHead = false;
+    let triggered = false;
     while (Date.now() < deadline) {
       const info = await this.prInfo(number);
       if (info.headRefOid !== expectedHead) {
@@ -129,13 +138,19 @@ export class GitHub {
         continue;
       }
       seenExpectedHead = true;
-      const checks = info.statusCheckRollup || [];
+      const required = (this.config.requiredPrCheck || 'web').toLowerCase();
+      const rollup = info.statusCheckRollup || [];
+      const hasRequired = rollup.some(check => (check.name || check.context || '').toLowerCase().includes(required));
+      const checks = hasRequired || !info.headRefName ? rollup : [...rollup,...await this.checkRunsForCommit(expectedHead)];
       const failed = checks.filter(check => /failure|error|timed_out|cancelled|action_required|startup_failure/i.test(check.conclusion || check.state || ''));
       if (failed.length) throw new Error(`PR #${number} checks failed: ${failed.map(check => check.name || check.context || 'unknown').join(', ')}`);
       const pending = checks.filter(check => !/success|neutral|skipped/i.test(check.conclusion || check.state || ''));
-      const required = (this.config.requiredPrCheck || 'web').toLowerCase();
       const requiredChecks = checks.filter(check => (check.name || check.context || '').toLowerCase().includes(required));
       if (!pending.length && requiredChecks.some(check => /success/i.test(check.conclusion || check.state || ''))) return checks.length;
+      if (!requiredChecks.length && !triggered && required === 'web' && info.headRefName && Date.now() - started >= (this.config.checksStartGraceMs ?? 30_000)) {
+        await this.triggerWebCheck(info.headRefName);
+        triggered = true;
+      }
       await new Promise(resolve => setTimeout(resolve, this.config.checksPollMs ?? 10_000));
     }
     throw new Error(`PR #${number} checks timed out`);

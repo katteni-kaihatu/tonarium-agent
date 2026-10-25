@@ -40,3 +40,23 @@ test('release waits for the Web check to appear', async () => {
   assert.equal(await git.waitForChecks(12,'tested-sha'),1);
   assert.equal(calls,2);
 });
+
+test('release accepts a successful Web check attached to the exact commit', async () => {
+  const git = new GitHub({checksTimeoutMs:1000},process.cwd());
+  git.prInfo = async () => ({headRefOid:'tested-sha',headRefName:'agent/task-1',statusCheckRollup:[]});
+  git.checkRunsForCommit = async sha => {
+    assert.equal(sha,'tested-sha');
+    return [{name:'web',conclusion:'success',state:'completed'}];
+  };
+  assert.equal(await git.waitForChecks(12,'tested-sha'),1);
+});
+
+test('release starts the Web workflow when GitHub has not scheduled a check', async () => {
+  const git = new GitHub({checksTimeoutMs:1000,checksPollMs:1,checksStartGraceMs:0},process.cwd());
+  git.prInfo = async () => ({headRefOid:'tested-sha',headRefName:'agent/task-1',statusCheckRollup:[]});
+  let checked = 0, triggered = 0;
+  git.checkRunsForCommit = async () => ++checked === 1 ? [] : [{name:'web',conclusion:'success',state:'completed'}];
+  git.triggerWebCheck = async branch => { assert.equal(branch,'agent/task-1'); triggered++; };
+  assert.equal(await git.waitForChecks(12,'tested-sha'),1);
+  assert.equal(triggered,1);
+});
