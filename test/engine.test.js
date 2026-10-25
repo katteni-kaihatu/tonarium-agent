@@ -233,7 +233,7 @@ test('completed threads answer implementation questions without reopening the ta
   } finally { f.close(); }
 });
 
-test('release follows the release agent selected PR order', async () => {
+test('release attempts every ready PR even if the review omits one', async () => {
   const f = fixture();
   try {
     f.store.create('first','先に入れる変更');
@@ -241,7 +241,7 @@ test('release follows the release agent selected PR order', async () => {
     f.store.create('second','後に入れる変更');
     f.store.update('second',{status:'pr_ready',branch:'agent/second',pr_number:94});
     f.engine.config = {baseBranch:'main',githubRepo:'owner/repo',batchMs:0};
-    f.engine.ai = {ask:async () => ({selectedIds:['first','second'],notes:''})};
+    f.engine.ai = {ask:async () => ({selectedIds:['second'],notes:''})};
     const visited = [];
     f.engine.git = {
       prInfo:async number => { visited.push(number); return {state:'MERGED',mergeCommit:{oid:'merged'}}; },
@@ -249,5 +249,19 @@ test('release follows the release agent selected PR order', async () => {
     };
     assert.equal(await f.engine.release(true),true);
     assert.deepEqual(visited,[91,94]);
+  } finally { f.close(); }
+});
+
+test('release keeps merging when the review agent is unavailable', async () => {
+  const f = fixture();
+  try {
+    f.store.create('ticket','出荷できる変更');
+    f.store.update('ticket',{status:'pr_ready',branch:'agent/ticket',pr_number:123});
+    f.engine.config = {baseBranch:'main',githubRepo:'owner/repo',batchMs:0};
+    f.engine.ai = {ask:async () => { throw new Error('model unavailable'); }};
+    f.engine.git = {prInfo:async () => ({state:'MERGED',mergeCommit:{oid:'merge-sha'}}),baseHead:async () => 'merge-sha'};
+    assert.equal(await f.engine.release(true),true);
+    assert.equal(f.store.get('ticket').status,'merged');
+    assert.ok(f.store.events().some(event => event.kind === 'selection_warning'));
   } finally { f.close(); }
 });

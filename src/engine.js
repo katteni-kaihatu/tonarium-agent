@@ -295,7 +295,7 @@ export class Engine {
   }
   async release(force = false) {
     if (this.releasing) return false;
-    const ready = this.store.list().filter(row => row.status === 'pr_ready' && row.branch && row.pr_number && Date.now() >= Number(this.store.getKv(`release-retry-after:${row.id}`) || 0)).sort((a,b) => a.updated_at - b.updated_at);
+    const ready = this.store.list().filter(row => row.status === 'pr_ready' && row.branch && row.pr_number && Date.now() >= Number(this.store.getKv(`release-retry-after:${row.id}`) || 0)).sort((a,b) => a.updated_at - b.updated_at || a.created_at - b.created_at || a.id.localeCompare(b.id));
     if (!ready.length) return false;
     if (!force && Date.now() - Math.min(...ready.map(row => row.updated_at)) < this.config.batchMs) return false;
     this.releasing = true;
@@ -304,12 +304,14 @@ export class Engine {
     let merged = 0, failedTickets = 0;
     let finalSha = '';
     try {
-      const selection = await this.ai.ask(roleName('release'), `出荷担当として今回 ${this.config.baseBranch || 'main'} にマージする PR を選んでください。既定では全部処理します。依存関係の理由で除外するものだけ省いてください。返す JSON: {"selectedIds": ["ticket id"], "notes": "短いマージ説明"}。\n\n候補: ${JSON.stringify(ready.map(x => ({id:x.id,title:x.title,summary:x.summary,pr:x.pr_number})))}`);
-      const selected = [...new Set(asList(selection.selectedIds))].map(id => ready.find(row => row.id === id)).filter(Boolean);
-      if (!selected.length) throw new Error('Release agent selected no PRs');
-      this.store.updateRelease(releaseId, { tickets: JSON.stringify(selected.map(x => x.id)) });
-      this.event(null,'release','batch',`${selected.length} 件の PR を確認: ${trim(selection.notes, 300)}`);
-      for (const ticket of selected) {
+      let notes = '';
+      try {
+        const review = await this.ai.ask(roleName('release'), `出荷担当として、出荷待ちの PR の依存関係と注意点を確認してください。各 PR は個別に検証し、通るものを順にマージします。返す JSON: {"notes":"短いマージ説明"}。\n\n候補: ${JSON.stringify(ready.map(x => ({id:x.id,title:x.title,summary:x.summary,pr:x.pr_number})))}`);
+        notes = trim(review.notes,300);
+      } catch (error) { this.event(null,'release','selection_warning',`出荷前レビュー失敗。PR の個別検証を続行: ${trim(error.message,300)}`); }
+      this.store.updateRelease(releaseId, { tickets: JSON.stringify(ready.map(x => x.id)) });
+      this.event(null,'release','batch',`${ready.length} 件の PR を個別に確認: ${notes}`);
+      for (const ticket of ready) {
         let worktree;
         try {
           const before = await this.git.prInfo(ticket.pr_number);
