@@ -142,7 +142,7 @@ export class Engine {
       this.implement(ticket.id, worker).finally(() => { this.busyWorkers.delete(worker.id); this.active.delete(ticket.id); this.onChange(); });
     }
     const ready = this.store.list().filter(row => row.status === 'pr_ready');
-    if (this.config.autoRelease && !this.releasing && ready.length && Date.now() - this.lastReleaseAttempt > 10 * 60_000 && Date.now() - Math.min(...ready.map(row => row.updated_at)) >= this.config.batchMs) {
+    if (this.config.autoRelease && !this.releasing && ready.length && Date.now() - this.lastReleaseAttempt > 60_000 && Date.now() - Math.min(...ready.map(row => row.updated_at)) >= this.config.batchMs) {
       this.release().catch(error => console.error('release', error));
     }
   }
@@ -187,7 +187,7 @@ export class Engine {
     let finalSha = '';
     try {
       const selection = await this.ai.ask(roleName('release'), `出荷担当として今回 ${this.config.baseBranch || 'main'} にマージする PR を選んでください。既定では全部処理します。依存関係の理由で除外するものだけ省いてください。返す JSON: {"selectedIds": ["ticket id"], "notes": "短いマージ説明"}。\n\n候補: ${JSON.stringify(ready.map(x => ({id:x.id,title:x.title,summary:x.summary,pr:x.pr_number})))}`);
-      const selected = ready.filter(row => asList(selection.selectedIds).includes(row.id));
+      const selected = [...new Set(asList(selection.selectedIds))].map(id => ready.find(row => row.id === id)).filter(Boolean);
       if (!selected.length) throw new Error('Release agent selected no PRs');
       this.store.updateRelease(releaseId, { tickets: JSON.stringify(selected.map(x => x.id)) });
       this.event(null,'release','batch',`${selected.length} 件の PR を確認: ${trim(selection.notes, 300)}`);
@@ -230,6 +230,7 @@ export class Engine {
       }
       finalSha = await this.git.baseHead();
       this.store.updateRelease(releaseId, { status: 'merged', commit_sha:finalSha, url:`https://github.com/${this.config.githubRepo}/tree/${this.config.baseBranch || 'main'}` });
+      this.lastReleaseAttempt = 0;
       return true;
     } catch (error) {
       this.store.updateRelease(releaseId, { status: merged ? 'partial' : 'failed', commit_sha:finalSha || null, error: trim(error.message, 2000) });

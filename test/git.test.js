@@ -15,9 +15,22 @@ test('release refuses a failed PR check', async () => {
 });
 
 test('release refuses a PR whose head changed after testing', async () => {
-  const git = new GitHub({checksTimeoutMs:1000},process.cwd());
-  git.prInfo = async () => ({headRefOid:'different-sha',statusCheckRollup:[]});
+  const git = new GitHub({checksTimeoutMs:1000,checksPollMs:1},process.cwd());
+  let calls = 0;
+  git.prInfo = async () => ++calls === 1
+    ? {headRefOid:'tested-sha',statusCheckRollup:[{name:'web',state:'PENDING'}]}
+    : {headRefOid:'different-sha',statusCheckRollup:[]};
   await assert.rejects(git.waitForChecks(12,'tested-sha'),/head changed/);
+});
+
+test('release waits for GitHub to reflect the pushed PR head', async () => {
+  const git = new GitHub({checksTimeoutMs:1000,checksPollMs:1},process.cwd());
+  let calls = 0;
+  git.prInfo = async () => ++calls === 1
+    ? {headRefOid:'old-sha',statusCheckRollup:[]}
+    : {headRefOid:'tested-sha',statusCheckRollup:[{name:'web',conclusion:'SUCCESS'}]};
+  assert.equal(await git.waitForChecks(12,'tested-sha'),1);
+  assert.equal(calls,2);
 });
 
 test('release waits for the Web check to appear', async () => {

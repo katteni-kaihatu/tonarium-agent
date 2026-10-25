@@ -54,8 +54,10 @@ npm start
 | `TRANSLATION_PROVIDER` | 既定は `claude`（サブスク）。`openai` を選ぶと翻訳だけ OpenAI API を使う。 |
 | `TRANSLATION_MODEL` | OpenAI API 翻訳時のモデル。既定は `gpt-6-luna`。 |
 | `OPENAI_API_KEY` | `TRANSLATION_PROVIDER=openai` の場合だけ必要。Codex の聞き取り・実装には渡さない。 |
-| `RELEASE_BATCH_MINUTES` | PR をまとめる待ち時間。既定 30 分。 |
+| `RELEASE_BATCH_MINUTES` | PR をまとめる待ち時間。既定 `0`（準備完了後、次の15秒巡回で出荷開始）。 |
 | `REQUIRED_PR_CHECK` | GitHub で成功を待つチェック名。既定 `web`。 |
+
+すでに出荷待ちの PR を即時処理する場合は、Bot を止めずに `npm run release:ready` を実行できます。出荷担当が最新 `main` への統合、ローカルテスト、GitHub チェック、PR マージを順番に行います。
 
 Bot には対象チャンネルで **View Channel、Read Message History、Create Public Threads、Send Messages in Threads** を与えてください。判断用フォーラムを使う場合は投稿権限も必要です。Message Content Intent の詳細は [Discord の公式資料](https://github.com/discord/discord-api-docs/blob/main/developers/events/gateway.mdx) を参照してください。
 

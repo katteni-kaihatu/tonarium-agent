@@ -73,9 +73,15 @@ export class GitHub {
   }
   async waitForChecks(number, expectedHead) {
     const deadline = Date.now() + (this.config.checksTimeoutMs || 20 * 60_000);
+    let seenExpectedHead = false;
     while (Date.now() < deadline) {
       const info = await this.prInfo(number);
-      if (info.headRefOid !== expectedHead) throw new Error(`PR #${number} head changed while checks were running`);
+      if (info.headRefOid !== expectedHead) {
+        if (seenExpectedHead) throw new Error(`PR #${number} head changed while checks were running`);
+        await new Promise(resolve => setTimeout(resolve, this.config.checksPollMs ?? 10_000));
+        continue;
+      }
+      seenExpectedHead = true;
       const checks = info.statusCheckRollup || [];
       const failed = checks.filter(check => /failure|error|timed_out|cancelled|action_required|startup_failure/i.test(check.conclusion || check.state || ''));
       if (failed.length) throw new Error(`PR #${number} checks failed: ${failed.map(check => check.name || check.context || 'unknown').join(', ')}`);

@@ -10,7 +10,8 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "test": "node --test",
-    "doctor": "node src/doctor.js"
+    "doctor": "node src/doctor.js",
+    "release:ready": "node src/release-ready.js"
   },
   "dependencies": {
     "@openai/codex": "^0.164.0",

@@ -115,3 +115,35 @@ test('release retries when main advances while PR checks run', async () => {
     assert.equal(f.store.get('ticket-1').status,'pr_ready');
   } finally { f.close(); }
 });
+
+test('scheduler starts release on the next tick when batching is zero', async () => {
+  const f = fixture();
+  try {
+    f.store.create('ticket-1','修正');
+    f.store.update('ticket-1',{status:'pr_ready',branch:'agent/task-1',pr_number:12});
+    f.engine.config = {maxWorkers:0,autoRelease:true,batchMs:0};
+    let called = false;
+    f.engine.release = async () => { called = true; };
+    await f.engine.tick();
+    assert.equal(called,true);
+  } finally { f.close(); }
+});
+
+test('release follows the release agent selected PR order', async () => {
+  const f = fixture();
+  try {
+    f.store.create('first','先に入れる変更');
+    f.store.update('first',{status:'pr_ready',branch:'agent/first',pr_number:91});
+    f.store.create('second','後に入れる変更');
+    f.store.update('second',{status:'pr_ready',branch:'agent/second',pr_number:94});
+    f.engine.config = {baseBranch:'main',githubRepo:'owner/repo',batchMs:0};
+    f.engine.ai = {ask:async () => ({selectedIds:['first','second'],notes:''})};
+    const visited = [];
+    f.engine.git = {
+      prInfo:async number => { visited.push(number); return {state:'MERGED',mergeCommit:{oid:'merged'}}; },
+      baseHead:async () => 'merged'
+    };
+    assert.equal(await f.engine.release(true),true);
+    assert.deepEqual(visited,[91,94]);
+  } finally { f.close(); }
+});

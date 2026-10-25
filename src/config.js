@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { resolve } from 'node:path';
 
 const number = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback;
+const nonNegativeNumber = (value, fallback) => value !== undefined && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : fallback;
 const defaultRoles = [
   { id: 'intake', name: 'ひより', job: '聞き取り', color: 'mint' },
   { id: 'pm', name: 'さくら', job: 'PM', color: 'rose' },
@@ -38,7 +39,7 @@ export function getConfig(env = process.env) {
     host: env.HOST || '127.0.0.1',
     port: number(env.PORT, 43879),
     maxWorkers: Math.min(3, Math.max(1, number(env.MAX_WORKERS, 3))),
-    batchMs: number(env.RELEASE_BATCH_MINUTES, 30) * 60_000,
+    batchMs: nonNegativeNumber(env.RELEASE_BATCH_MINUTES, 0) * 60_000,
     checksTimeoutMs: number(env.CHECKS_TIMEOUT_MINUTES || env.RELEASE_TIMEOUT_MINUTES, 20) * 60_000,
     requiredPrCheck: env.REQUIRED_PR_CHECK || 'web',
     autoRelease: env.AUTO_RELEASE !== 'false'
