@@ -31,7 +31,7 @@ flowchart LR
 
 ## セットアップ
 
-Node.js 22.13 以降、Git、GitHub CLI (`gh`)、Codex CLI、Claude Code CLI を用意してください。`gh auth login` と各 AI CLI のログイン、または対応する API キーが必要です。**このアプリは常駐するローカルプロセス**なので、API キーを GitHub Actions Secrets に登録するだけでは動きません。
+Node.js 22.13 以降、Git、GitHub CLI (`gh`)、Codex CLI、Claude Code CLI を用意してください。この PC では `gh`、Claude、Codex のログインがすでに確認できています。既定の `AGENT_AUTH_MODE=subscription` では **Claude Max と ChatGPT/Codex のサブスク枠**で CLI を実行し、モデルの子プロセスから API キー環境変数を外します。OpenAI / Anthropic の API キーは不要です。このアプリは常駐するローカルプロセスです。
 
 ```powershell
 cd C:\Users\neo\GitHub\tonarium-agent
@@ -52,6 +52,8 @@ npm start
 | `TONARIUM_REPO` | Tonarium の既存 Git checkout。初期値は `C:\Users\neo\GitHub\tonarium-prototype`。 |
 | `PLANNING_PROVIDER` | 聞き取り・PM・リード・出荷に使う `claude` または `codex`。 |
 | `CODING_PROVIDER` / `INTEGRATION_PROVIDER` | 実装・競合解決に使う `codex` または `claude`。 |
+| `AGENT_AUTH_MODE` | `subscription` が既定。各 CLI のログインを使います。 |
+| `CODEX_MODEL` | この PC の ChatGPT ログインで動作確認した `gpt-5.6-sol` を既定にしています。 |
 | `COOLIFY_DEPLOY_WEBHOOK` | **Web nightly 専用アプリ**の認証付きデプロイ Webhook。 |
 | `COOLIFY_API_TOKEN` | Coolify の API token。デプロイ起動と状態取得に必要です。 |
 | `COOLIFY_API_BASE` | Coolify のオリジン。例 `https://coolify.example.com`。`/api/v1` は付けません。 |

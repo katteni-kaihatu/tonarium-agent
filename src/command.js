@@ -20,10 +20,11 @@ export async function command(file, args = [], { cwd, input, timeoutMs = 15 * 60
   });
 }
 
-export function cleanModelEnv(env = process.env) {
+export function cleanModelEnv(env = process.env, authMode = 'subscription') {
   const copy = { ...env };
   for (const key of Object.keys(copy)) {
-    if (/^(DISCORD_TOKEN|COOLIFY_|GITHUB_TOKEN|GH_TOKEN|NIGHTLY_URL)$/i.test(key)) delete copy[key];
+    if (key === 'DISCORD_TOKEN' || key.startsWith('COOLIFY_') || key === 'GITHUB_TOKEN' || key === 'GH_TOKEN' || key === 'NIGHTLY_URL') delete copy[key];
+    if (authMode === 'subscription' && /^(OPENAI_API_KEY|ANTHROPIC_API_KEY)$/i.test(key)) delete copy[key];
   }
   return copy;
 }

@@ -16,5 +16,15 @@ for (const executable of ['git','gh',config.planningProvider,config.codingProvid
   try { await command(executable,['--version'],{timeoutMs:10_000}); checks.push([`${executable} CLI`,true,'found']); }
   catch { checks.push([`${executable} CLI`,false,'not found or not executable']); }
 }
+if (config.authMode === 'subscription') {
+  try {
+    const result = await command('claude',['auth','status'],{timeoutMs:10_000});
+    checks.push(['Claude subscription login',JSON.parse(result.stdout).loggedIn === true,'claude auth status']);
+  } catch { checks.push(['Claude subscription login',false,'claude auth login']); }
+  try {
+    const result = await command('codex',['login','status'],{timeoutMs:10_000});
+    checks.push(['Codex subscription login',/Logged in/i.test(result.stdout + result.stderr),'codex login']);
+  } catch { checks.push(['Codex subscription login',false,'codex login']); }
+}
 for (const [name,ok,detail] of checks) console.log(`${ok ? 'OK' : 'SETUP'}  ${name}: ${detail}`);
 console.log('\nComplete every SETUP item before connecting a live feedback channel.');

@@ -28,6 +28,8 @@ export function getConfig(env = process.env) {
     planningProvider: env.PLANNING_PROVIDER || 'claude',
     codingProvider: env.CODING_PROVIDER || 'codex',
     integrationProvider: env.INTEGRATION_PROVIDER || 'codex',
+    authMode: env.AGENT_AUTH_MODE || 'subscription',
+    codexModel: env.CODEX_MODEL || 'gpt-5.6-sol',
     coolifyWebhook: env.COOLIFY_DEPLOY_WEBHOOK || '',
     coolifyToken: env.COOLIFY_API_TOKEN || '',
     coolifyApiBase: (env.COOLIFY_API_BASE || '').replace(/\/$/, ''),
