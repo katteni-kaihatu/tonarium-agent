@@ -13,18 +13,21 @@ const checks = [
   ['GitHub release branch', Boolean(config.baseBranch), config.baseBranch]
 ];
 if (config.translationProvider === 'openai') checks.push(['OpenAI translation key',Boolean(config.translationApiKey),'OPENAI_API_KEY']);
-for (const executable of [...new Set(['git','gh',config.intakeProvider,config.planningProvider,config.codingProvider,config.integrationProvider].filter(x => x !== 'codex'))]) {
+const providers = [config.intakeProvider,config.planningProvider,config.codingProvider,config.integrationProvider,config.translationProvider];
+for (const executable of [...new Set(['git','gh',...providers].filter(x => x !== 'codex' && x !== 'openai'))]) {
   try { await command(executable,['--version'],{timeoutMs:10_000}); checks.push([`${executable} CLI`,true,'found']); }
   catch { checks.push([`${executable} CLI`,false,'not found or not executable']); }
 }
 const codexScript = join(dirname(dirname(fileURLToPath(import.meta.url))),'node_modules','@openai','codex','bin','codex.js');
 try { const result = await command(process.execPath,[codexScript,'--version'],{timeoutMs:10_000}); checks.push(['Project Codex CLI',/0\.164\.0/.test(result.stdout),'gpt-6.1-sol compatible']); }
 catch { checks.push(['Project Codex CLI',false,'run npm ci']); }
-if (config.authMode === 'subscription') {
+if (config.authMode === 'subscription' && providers.includes('claude')) {
   try {
     const result = await command('claude',['auth','status'],{timeoutMs:10_000});
     checks.push(['Claude subscription login',JSON.parse(result.stdout).loggedIn === true,'claude auth status']);
   } catch { checks.push(['Claude subscription login',false,'claude auth login']); }
+}
+if (config.authMode === 'subscription' && providers.includes('codex')) {
   try {
     const result = await command('codex',['login','status'],{timeoutMs:10_000});
     checks.push(['Codex subscription login',/Logged in/i.test(result.stdout + result.stderr),'codex login']);

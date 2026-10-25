@@ -30,7 +30,7 @@ export class Translator {
       });
       result = JSON.parse(response.output_text);
     } else {
-      result = await this.ai.ask('通訳', `${instruction}\n返す JSON: {"ja":"日本語","en":"English","ko":"한국어"}。\n\n発言: ${JSON.stringify(text)}`, { provider:this.config.translationProvider || 'claude', cwd:this.root, timeoutMs:90_000 });
+      result = await this.ai.ask('通訳', `${instruction}\n返す JSON: {"ja":"日本語","en":"English","ko":"한국어"}。\n\n発言: ${JSON.stringify(text)}`, { provider:this.config.translationProvider || 'codex', cwd:this.root, timeoutMs:90_000 });
     }
     const normalized = Object.fromEntries(['ja','en','ko'].map(language => [language,String(result?.[language] || '').trim()]));
     if (Object.values(normalized).some(value => !value)) throw new Error('Translation response is incomplete');

@@ -66,7 +66,7 @@ export class Engine {
   async feedback(id) {
     if (this.active.has(id)) { this.pendingFeedback.add(id); return; }
     this.active.add(id);
-    let snapshot, intakeRole, imageBundle;
+    let snapshot, intakeRole, imageBundle, phase = 'intake';
     try {
       const ticket = this.store.get(id);
       if (!ticket || !['intake','waiting_info','decision'].includes(ticket.status)) return;
@@ -108,8 +108,9 @@ export class Engine {
       }
       this.store.update(id, { status: 'planning' });
       this.event(id, intakeRole.id, 'ready', '実装に必要な情報が揃いました');
+      phase = 'planning';
       await this.plan(id, history);
-    } catch (error) { await this.fail(id, intakeRole?.id || 'intake', error); }
+    } catch (error) { await this.fail(id, phase === 'planning' ? 'pm' : intakeRole?.id || 'intake', error); }
     finally {
       if (imageBundle) await imageBundle.cleanup().catch(error => console.error('Could not clean up feedback images:',error));
       if (snapshot) await this.git.removeWorktree(snapshot.path);
@@ -220,8 +221,11 @@ export class Engine {
     }
   }
   async implement(id, worker) {
-    let worktree;
+    let worktree, completed = false, stage = 'code';
     try {
+      const previous = this.store.get(id);
+      const retryStage = this.store.getKv(`retry-stage:${id}`);
+      const retryInstruction = this.store.getKv(`retry-instruction:${id}`);
       const ticket = this.store.update(id, { status: 'coding', worker: worker.id, error: null });
       this.event(id, worker.id, 'coding', '専用 worktree で実装を開始');
       await this.git.prepare();
@@ -232,22 +236,62 @@ export class Engine {
       worktree = await this.git.resumeTaskWorktree(id) || await this.git.worktree(`task-${id}-${Date.now()}`,baseSha);
       if (worktree.resumed) this.event(id,worker.id,'resumed',`前回の作業ツリーから実装を再開: ${worktree.branch}`);
       const linked = this.store.list().filter(row => row.parent_ticket_id === id).map(row => row.summary);
-      const task = `${this.store.getKv(`task:${id}`) || ticket.summary}\n\n受け入れ条件:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}\n\n追加の声:\n${linked.join('\n')}`;
-      const report = await this.ai.code(worker.name, `${worktree.resumed ? '前回の未完了の差分が作業ツリーにあります。最初に git status と差分を読み、既存の変更を引き継いで完成させてください。\n\n' : ''}${task}`, worktree.path);
-      if (/NEEDS_CLARIFICATION/i.test(report)) {
-        this.store.update(id, { status: 'waiting_info', worker: null });
-        await this.discord.say(id, `**${worker.name}｜実装**\n追加確認が必要です。${trim(report, 1200)}`);
-        this.event(id, worker.id, 'question', trim(report, 500));
-        return;
+      const task = `${this.store.getKv(`task:${id}`) || ticket.summary}\n\n受け入れ条件:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}\n\n追加の声:\n${linked.join('\n')}${previous?.error && retryStage !== 'publish' ? `\n\n前回の失敗を修正してください:\n${trim(previous.error,1500)}` : ''}${retryInstruction && retryStage !== 'publish' ? `\n\nPM からの再作業指示:\n${retryInstruction}` : ''}`;
+      if (retryStage === 'publish') {
+        stage = 'publish';
+        this.event(id,'pm','retry',`実装とテスト済みの ${worktree.branch} を再送します`);
+        await this.git.pushWithRetry(worktree.path,worktree.branch,(attempt,error) => this.event(id,'pm','push_retry',`GitHub push 再試行 ${attempt}: ${trim(error.message,300)}`));
+      } else {
+        const report = await this.ai.code(worker.name, `${worktree.resumed ? '前回の未完了の差分が作業ツリーにあります。最初に git status と差分を読み、既存の変更を引き継いで完成させてください。\n\n' : ''}${task}`, worktree.path);
+        if (/NEEDS_CLARIFICATION/i.test(report)) {
+          this.store.update(id, { status: 'waiting_info', worker: null });
+          await this.discord.say(id, `**${worker.name}｜実装**\n追加確認が必要です。${trim(report, 1200)}`);
+          this.event(id, worker.id, 'question', trim(report, 500));
+          return;
+        }
+        await this.git.test(worktree.path);
+        stage = 'publish';
+        await this.git.commitPush(worktree.path, worktree.branch, `feat(agent): ${ticket.title}`.slice(0, 100), (attempt,error) => this.event(id,'pm','push_retry',`GitHub push 再試行 ${attempt}: ${trim(error.message,300)}`));
       }
-      await this.git.test(worktree.path);
-      await this.git.commitPush(worktree.path, worktree.branch, `feat(agent): ${ticket.title}`.slice(0, 100));
-      const pr = await this.git.pr(ticket.title, `${issue ? `Closes #${issue}\n\n` : ''}${ticket.summary}\n\nFeedback base: ${baseSha}\nChecks: npm run typecheck, npm run build, npm run test:client, npm run test:sync\n\nDiscord thread: ${id}`, worktree.branch);
+      const pr = await this.git.findPr(worktree.branch) || await this.git.pr(ticket.title, `${issue ? `Closes #${issue}\n\n` : ''}${ticket.summary}\n\nFeedback base: ${baseSha}\nChecks: npm run typecheck, npm run build, npm run test:client, npm run test:sync\n\nDiscord thread: ${id}`, worktree.branch);
+      if (!pr) throw new Error(`Could not find or create PR for ${worktree.branch}`);
       this.store.update(id, { status: 'pr_ready', pr_number: pr, branch: worktree.branch, worker: null });
+      this.store.setKv(`retry-stage:${id}`,'');
+      this.store.setKv(`retry-instruction:${id}`,'');
       this.event(id, worker.id, 'pr_ready', `PR #${pr} を検証済み。出荷待ち`);
-      await this.discord.say(id, `**${worker.name}｜実装**\n変更とテストが完了しました。PR #${pr} を出荷待ちに入れました。`);
-    } catch (error) { await this.fail(id, worker.id, error); }
-    finally { if (worktree) await this.git.removeWorktree(worktree.path); }
+      completed = true;
+      await this.discord.say(id, `**${worker.name}｜実装**\n変更とテストが完了しました。PR #${pr} を出荷待ちに入れました。`).catch(error => this.event(id,worker.id,'discord_warning',trim(error.message,300)));
+    } catch (error) {
+      const retryStage = stage === 'publish' && /^git (?:add|commit|status)\b/.test(error.message) ? 'code' : stage;
+      let scheduled = false;
+      if (worktree) {
+        try { scheduled = await this.pmRetry(id,error,retryStage,worktree); }
+        catch (reviewError) { this.event(id,'pm','retry_review_warning',trim(reviewError.message,300)); }
+      }
+      if (!scheduled) await this.fail(id, worker.id, error);
+    }
+    finally { if (completed && worktree) await this.git.removeWorktree(worktree.path); }
+  }
+  async pmRetry(id, error, stage, worktree) {
+    const key = `retry-count:${id}:${stage}`;
+    const attempt = Number(this.store.getKv(key) || 0);
+    if (attempt >= (stage === 'publish' ? 3 : 2)) return false;
+    const role = await this.acquireRole('PM',id);
+    let decision;
+    try {
+      decision = await this.ai.ask(role.name, `実装案件で失敗が起きました。作業ツリーの状態とエラーを確認し、同じ作業を再試行する価値があるか判断してください。GitHub への一時的な push 失敗なら再試行を選びます。コードやテストの失敗なら、修正の具体的な指示を付けます。認証・権限など人の操作が必要なら停止します。返す JSON: {"retry":boolean,"reason":"判断理由","instruction":"実装担当への修正指示"}。\n\n案件: ${this.store.get(id)?.title}\n段階: ${stage}\n失敗: ${trim(error.message,1500)}`, {provider:this.config.intakeProvider || 'codex',cwd:worktree.path,repoReadOnly:true,timeoutMs:2*60_000});
+    } catch (reviewError) {
+      this.event(id,role.id,'retry_review_warning',trim(reviewError.message,300));
+      decision = {retry:stage === 'publish',reason:'GitHub への送信を再試行します',instruction:''};
+    } finally { this.releaseRole(role); }
+    if (decision.retry !== true) return false;
+    this.store.setKv(key,attempt + 1);
+    this.store.setKv(`retry-stage:${id}`,stage);
+    this.store.setKv(`retry-instruction:${id}`,trim(decision.instruction,1000));
+    this.store.update(id,{status:'queued',branch:worktree.branch,worker:null,error:trim(error.message,2000)});
+    this.event(id,'pm','retry_scheduled',`${stage === 'publish' ? 'GitHub への送信' : '実装・検証'}を再試行 (${attempt + 1}回目): ${trim(decision.reason,300)}`);
+    await this.discord.say(id, `**${role.name}｜PM**\n${stage === 'publish' ? 'GitHub への送信' : '実装・検証'}で問題が起きたため、作業ツリーを残して再試行します。${trim(decision.reason,300)}`).catch(() => {});
+    return true;
   }
   async release(force = false) {
     if (this.releasing) return false;

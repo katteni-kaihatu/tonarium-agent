@@ -60,16 +60,33 @@ export class GitHub {
     const result = await this.gh(['pr','create','--repo',this.config.githubRepo,'--base',this.config.baseBranch || 'main','--head',branch,'--title',title,'--body',body]);
     return Number(result.stdout.match(/\/(\d+)\s*$/)?.[1]) || null;
   }
+  async findPr(branch) {
+    const result = await this.gh(['pr','list','--repo',this.config.githubRepo,'--head',branch,'--state','open','--json','number','--limit','1']);
+    return JSON.parse(result.stdout || '[]')[0]?.number || null;
+  }
   async closeIssue(number, note) {
     if (!number) return;
     await this.gh(['issue','close',String(number),'--repo',this.config.githubRepo,'--comment',note]);
   }
-  async commitPush(path, branch, title) {
+  async commitPush(path, branch, title, onRetry = () => {}) {
     const status = await this.git(['status','--porcelain'], path);
     if (!status.stdout) throw new Error('Agent made no code changes');
     await this.git(['add','-A'], path);
     await this.git(['commit','-m',title], path);
-    await this.git(['push','-u','origin',branch], path);
+    await this.pushWithRetry(path,branch,onRetry);
+  }
+  async pushWithRetry(path, branch, onRetry = () => {}) {
+    const delays = this.pushRetryDelays || [0,2_000,5_000];
+    let lastError;
+    for (let attempt = 0; attempt < delays.length; attempt++) {
+      if (delays[attempt]) await new Promise(resolve => setTimeout(resolve,delays[attempt]));
+      try { return await this.git(['push','-u','origin',branch],path); }
+      catch (error) {
+        lastError = error;
+        if (attempt + 1 < delays.length) onRetry(attempt + 1,error);
+      }
+    }
+    throw lastError;
   }
   async mergeMainInto(path) {
     await this.git(['merge','--no-edit',`origin/${this.config.baseBranch || 'main'}`], path);

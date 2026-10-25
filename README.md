@@ -33,7 +33,7 @@ Bot が停止していた間に完了済みスレッドへ届いた質問も、�
 
 ## セットアップ
 
-Node.js 22.13 以降、Git、GitHub CLI (`gh`)、Claude Code CLI が必要です。Codex CLI はこのプロジェクトに `@openai/codex` を固定しており、システムの古い CLI に依存しません。既定では Claude Max と ChatGPT/Codex のサブスクログインを使い、AI 用 API キーを子プロセスへ渡しません。
+Node.js 22.13 以降、Git、GitHub CLI (`gh`) が必要です。Codex CLI はこのプロジェクトに `@openai/codex` を固定しています。既定では受付、PM、リード、実装、出荷、通訳の全員が ChatGPT/Codex のサブスクログインを使い、AI 用 API キーを子プロセスへ渡しません。`claude` を明示的に選んだ場合だけ Claude Code CLI が必要です。
 
 ```powershell
 cd C:\Users\neo\GitHub\tonarium-agent
@@ -55,10 +55,10 @@ npm start
 | `GITHUB_REPO` | `katteni-kaihatu/tonarium-prototype`。`gh auth login` の書き込み権限が必要。 |
 | `RELEASE_BRANCH` | `main`。 |
 | `INTAKE_PROVIDER` | 聞き取り5人に使う `codex` または `claude`。既定 `codex`。 |
-| `PLANNING_PROVIDER` | PM・リード・出荷・実装案内に使う `claude` または `codex`。 |
+| `PLANNING_PROVIDER` | PM・リード・出荷・実装案内に使う `codex` または `claude`。既定 `codex`。 |
 | `CODING_PROVIDER` / `INTEGRATION_PROVIDER` | 実装・競合解決に使う `codex` または `claude`。 |
 | `CODEX_MODEL` / `CODEX_SPEED` | 既定は `gpt-6.1-sol` / `fast`。この PC でサブスクログインによる応答を確認済み。 |
-| `TRANSLATION_PROVIDER` | 既定は `claude`（サブスク）。`openai` を選ぶと翻訳だけ OpenAI API を使う。 |
+| `TRANSLATION_PROVIDER` | 既定は `codex`（サブスク）。`openai` を選ぶと翻訳だけ OpenAI API を使う。 |
 | `TRANSLATION_MODEL` | OpenAI API 翻訳時のモデル。既定は `gpt-6-luna`。 |
 | `OPENAI_API_KEY` | `TRANSLATION_PROVIDER=openai` の場合だけ必要。Codex の聞き取り・実装には渡さない。 |
 | `MAX_WORKERS` | 同時に動く実装担当の上限。既定 `15`。聞き取りとリードは各5人。 |

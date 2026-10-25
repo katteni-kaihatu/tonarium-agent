@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Translator } from '../src/translation.js';
 
-test('subscription translator returns and caches Japanese, English and Korean', async () => {
+test('Codex subscription translator returns and caches Japanese, English and Korean', async () => {
   let calls = 0;
-  const ai = { ask: async () => { calls++; return {ja:'こんにちは',en:'Hello',ko:'안녕하세요'}; } };
-  const translator = new Translator({translationProvider:'claude'},ai,process.cwd());
+  const ai = { ask: async (_role,_prompt,options) => { assert.equal(options.provider,'codex'); calls++; return {ja:'こんにちは',en:'Hello',ko:'안녕하세요'}; } };
+  const translator = new Translator({translationProvider:'codex'},ai,process.cwd());
   assert.deepEqual(await translator.translate('こんにちは'),{ja:'こんにちは',en:'Hello',ko:'안녕하세요'});
   await translator.translate('こんにちは');
   assert.equal(calls,1);

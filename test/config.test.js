@@ -14,3 +14,8 @@ test('intake and leads each have five agents and implementation has fifteen', ()
   assert.equal(roles.filter(role => role.job === '実装').length,15);
   assert.equal(getConfig({MAX_WORKERS:'15'}).maxWorkers,15);
 });
+
+test('all agent roles default to Codex subscription', () => {
+  const config = getConfig({});
+  for (const key of ['intakeProvider','planningProvider','codingProvider','integrationProvider','translationProvider']) assert.equal(config[key],'codex');
+});
