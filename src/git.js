@@ -47,7 +47,7 @@ export class GitHub {
     await rm(path, { recursive: true, force: true }).catch(() => {});
   }
   async test(path) {
-    const base = (await this.git(['rev-parse',`origin/${this.config.baseBranch || 'main'}`],path)).stdout;
+    const base = (await this.git(['merge-base','HEAD',`origin/${this.config.baseBranch || 'main'}`],path)).stdout;
     if (await this.changelogCheck(path,base) === 'missing') throw new Error('Every PR must add a new dated entry to shared/changelog.ts');
     await command('npm', ['ci'], { cwd: path, timeoutMs: 15 * 60_000 });
     await command('npm', ['run','typecheck'], { cwd: path, timeoutMs: 15 * 60_000 });

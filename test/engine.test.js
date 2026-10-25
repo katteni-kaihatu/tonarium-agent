@@ -256,6 +256,25 @@ test('a bug report in a completed thread creates a linked repair ticket', async 
   } finally { f.close(); }
 });
 
+test('PM reviews a stopped ticket and requeues its saved worktree', async () => {
+  const f = fixture();
+  try {
+    f.store.create('stopped','二段ジャンプ');
+    f.store.update('stopped',{status:'failed',error:'main advanced; changelog check failed',branch:'agent/stopped'});
+    f.engine.git.resumeTaskWorktree = async id => { assert.equal(id,'stopped'); return {path:f.dir}; };
+    f.engine.ai = {ask:async (_name,prompt,options) => {
+      assert.match(prompt,/変更履歴|changelog/);
+      assert.equal(options.cwd,f.dir);
+      return {retry:true,reason:'最新mainとの差分を調整できる',instruction:'既存の履歴を保持して再検証する'};
+    }};
+    await f.engine.reviewFailed('stopped');
+    assert.equal(f.store.get('stopped').status,'queued');
+    assert.equal(f.store.getKv('retry-instruction:stopped'),'既存の履歴を保持して再検証する');
+    assert.equal(f.store.getKv('failed-review-count:stopped'),'1');
+    assert.ok(f.store.events().some(event => event.kind === 'retry_scheduled'));
+  } finally { f.close(); }
+});
+
 test('release attempts every ready PR even if the review omits one', async () => {
   const f = fixture();
   try {

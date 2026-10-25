@@ -6,12 +6,13 @@ const lanes = [
   { name:'計画', statuses:['planning','queued'] },
   { name:'実装', statuses:['coding'] },
   { name:'統合・出荷', statuses:['pr_ready','integrating'] },
-  { name:'対応済み', statuses:['merged','resolved_existing'] }
+  { name:'対応済み', statuses:['merged','resolved_existing'] },
+  { name:'要対応', statuses:['failed'] }
 ];
 function render(state) {
   $('connection').className = `connection ${state.mode === 'live' ? '' : 'setup'}`;
   $('connection').innerHTML = `<i></i>${state.mode === 'live' ? 'LIVE SYSTEM' : 'SETUP MODE'}`;
-  $('stat-open').textContent = String(state.tickets.filter(x => !['merged','resolved_existing','grouped','failed'].includes(x.status)).length).padStart(2,'0');
+  $('stat-open').textContent = String(state.tickets.filter(x => !['merged','resolved_existing','grouped'].includes(x.status)).length).padStart(2,'0');
   $('stat-progress').textContent = String(state.tickets.filter(x => ['planning','queued','coding','integrating'].includes(x.status)).length).padStart(2,'0');
   $('stat-ready').textContent = String(state.tickets.filter(x => x.status === 'pr_ready').length).padStart(2,'0');
   const latest = state.releases.find(x => x.status === 'merged');

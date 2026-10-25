@@ -230,6 +230,13 @@ export class Engine {
     finally { this.active.delete(id); }
   }
   async tick() {
+    const failed = this.store.list().reverse().find(row => row.status === 'failed' && !this.active.has(row.id)
+      && Number(this.store.getKv(`failed-review-count:${row.id}`) || 0) < 3
+      && Date.now() >= Number(this.store.getKv(`failed-review-after:${row.id}`) || 0));
+    if (failed) {
+      this.active.add(failed.id);
+      this.reviewFailed(failed.id).finally(() => { this.active.delete(failed.id); this.onChange(); });
+    }
     for (const worker of roles.filter(role => role.job === '実装').slice(0, this.config.maxWorkers)) {
       if (this.busyWorkers.has(worker.id)) continue;
       const ticket = this.store.list().reverse().find(row => row.status === 'queued' && !this.active.has(row.id));
@@ -315,6 +322,35 @@ export class Engine {
     this.event(id,'pm','retry_scheduled',`${stage === 'publish' ? 'GitHub への送信' : '実装・検証'}を再試行 (${attempt + 1}回目): ${trim(decision.reason,300)}`);
     await this.discord.say(id, `**${role.name}｜PM**\n${stage === 'publish' ? 'GitHub への送信' : '実装・検証'}で問題が起きたため、作業ツリーを残して再試行します。${trim(decision.reason,300)}`).catch(() => {});
     return true;
+  }
+  async reviewFailed(id) {
+    const ticket = this.store.get(id);
+    if (!ticket || ticket.status !== 'failed') return;
+    const countKey = `failed-review-count:${id}`;
+    const count = Number(this.store.getKv(countKey) || 0) + 1;
+    this.store.setKv(countKey,count);
+    this.store.setKv(`failed-review-after:${id}`,Date.now() + 60_000);
+    let role;
+    try {
+      role = await this.acquireRole('PM',id);
+      const worktree = await this.git.resumeTaskWorktree(id).catch(() => null);
+      const decision = await this.ai.ask(role.name, `停止した開発案件を確認してください。残っている作業ツリーの差分とエラーを読み、再試行で修復できるなら retry=true にして具体的な修正指示を書いてください。新しい main が進んだことによる履歴や競合の失敗なら、元の変更を保持したまま統合するよう指示します。認証や製品判断など人の対応が必要なら retry=false にしてください。返す JSON: {"retry":boolean,"reason":"判断理由","instruction":"実装担当への修正指示"}。\n\n案件: ${ticket.title}\n失敗: ${trim(ticket.error,1500)}\n再検討: ${count}/3`, {provider:this.config.intakeProvider || 'codex',cwd:worktree?.path || this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
+      if (decision.retry !== true) {
+        this.store.setKv(countKey,3);
+        this.event(id,role.id,'needs_attention',trim(decision.reason || '人の確認が必要です',500));
+        await this.discord.say(id, `**${role.name}｜PM**\n再試行を止めました。${trim(decision.reason || '人の確認が必要です',500)}`).catch(() => {});
+        return;
+      }
+      this.store.setKv(`retry-stage:${id}`,'code');
+      this.store.setKv(`retry-instruction:${id}`,trim(decision.instruction,1000));
+      this.store.update(id,{status:'queued',worker:null});
+      this.event(id,role.id,'retry_scheduled',`停止案件を再開 (${count}/3): ${trim(decision.reason,500)}`);
+      await this.discord.say(id, `**${role.name}｜PM**\n作業ツリーを引き継いで再試行します。${trim(decision.reason,400)}`).catch(() => {});
+    } catch (error) {
+      this.event(id,role?.id || 'pm','retry_review_warning',trim(error.message,500));
+    } finally {
+      if (role) this.releaseRole(role);
+    }
   }
   async release(force = false) {
     if (this.releasing) return false;
@@ -431,6 +467,6 @@ export class Engine {
     const message = trim(error?.message || error, 2000);
     this.store.update(id, { status: 'failed', error: message, worker: null });
     this.event(id, actor, 'failed', message);
-    await this.discord.say(id, `**${roleName(actor)}**\n処理を止めました。担当者が確認します。${trim(message, 500)}`).catch(() => {});
+    await this.discord.say(id, `**${roleName(actor)}**\n処理を止めました。PMが原因を確認し、再試行を判断します。${trim(message, 500)}`).catch(() => {});
   }
 }
