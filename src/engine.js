@@ -500,7 +500,7 @@ export class Engine {
     }
   }
   async markMerged(ticket,sha) {
-    this.store.update(ticket.id, { status:'merged', answered_message_id:this.store.get(ticket.id).last_message_id });
+    this.store.update(ticket.id, { status:'merged', error:null, answered_message_id:this.store.get(ticket.id).last_message_id });
     this.event(ticket.id,'release','merged',`PR #${ticket.pr_number} を ${this.config.baseBranch || 'main'} へマージ: ${sha?.slice(0,8) || ''}`);
     if (ticket.issue_number) await this.git.closeIssue(ticket.issue_number, `PR #${ticket.pr_number} merged into ${this.config.baseBranch || 'main'}`).catch(error => this.event(ticket.id,'release','issue_warning',error.message));
     await this.discord.say(ticket.id, `**${roleName('release')}｜出荷**\nPR #${ticket.pr_number} のチェックを確認し、${this.config.baseBranch || 'main'} にマージしました。${sha ? `\nマージ commit: ${sha.slice(0,8)}` : ''}`).catch(error => this.event(ticket.id,'release','discord_warning',error.message));
