@@ -214,6 +214,71 @@ test('a failing PR does not prevent another ready PR from merging', async () => 
   } finally { f.close(); }
 });
 
+test('the second failed Web check pauses release and asks the thread owner', async () => {
+  const f = fixture();
+  try {
+    f.store.create('ticket','共有アセット');
+    f.store.update('ticket',{status:'pr_ready',branch:'agent/ticket',pr_number:249});
+    f.engine.config = {baseBranch:'main',githubRepo:'owner/repo',batchMs:0,maxWorkers:0,autoRelease:false};
+    f.engine.ai = {ask:async () => ({question:'Webチェックが失敗しました。修正して再開しますか？'})};
+    f.engine.discord.threadOwnerId = async () => '12345678901234567';
+    f.engine.testAndRepairIntegration = async () => {};
+    f.engine.git = {
+      prInfo:async () => ({state:'OPEN'}), baseHead:async () => 'base-sha',
+      git:async () => ({stdout:''}), worktree:async () => ({path:'candidate'}),
+      mergeMainInto:async () => {}, pushBranch:async () => 'head-sha',
+      waitForChecks:async () => { throw new Error('Web checks failed'); },
+      removeWorktree:async () => {}
+    };
+    await f.engine.release(true);
+    assert.equal(f.store.get('ticket').status,'pr_ready');
+    f.store.setKv('release-retry-after:ticket',0);
+    await f.engine.release(true);
+    assert.equal(f.store.get('ticket').status,'waiting_info');
+    assert.equal(f.store.getKv('release-failure-count:ticket'),'2');
+    assert.equal(f.sent.at(-1).options.mentionUserId,'12345678901234567');
+    f.engine.discord.userMessage = async () => 'ユーザー: 修正して再開してください';
+    f.engine.ai.ask = async () => ({retry:true,instruction:'失敗したテストを修正',reason:'再開'});
+    f.store.update('ticket',{last_message_id:'12345678901234568'});
+    await f.engine.receive('ticket');
+    assert.equal(f.store.get('ticket').status,'pr_ready');
+    assert.equal(f.store.getKv('release-instruction:ticket'),'失敗したテストを修正');
+  } finally { f.close(); }
+});
+
+test('PM reviews the second failed Web check and orders a bounded repair', async () => {
+  const f = fixture();
+  try {
+    f.store.create('ticket','共有アセット');
+    f.store.update('ticket',{status:'pr_ready',branch:'agent/ticket',pr_number:249});
+    f.engine.config = {baseBranch:'main',githubRepo:'owner/repo',batchMs:0,maxWorkers:0,autoRelease:false};
+    let reviewed = 0;
+    f.engine.ai = {ask:async (_role,prompt) => {
+      if (prompt.includes('出荷段階で同じPR')) {
+        reviewed++;
+        assert.match(prompt,/asset unavailable/);
+        return {retry:true,instruction:'共有アセットの不変性テストを修正',reason:'CIの失敗を修正できる'};
+      }
+      return {notes:''};
+    }};
+    f.engine.testAndRepairIntegration = async () => {};
+    f.engine.git = {
+      prInfo:async () => ({state:'OPEN'}), baseHead:async () => 'base-sha',
+      git:async () => ({stdout:''}), worktree:async () => ({path:'candidate'}),
+      mergeMainInto:async () => {}, pushBranch:async () => 'head-sha',
+      waitForChecks:async () => { throw new Error('Web checks failed'); },
+      failedCheckDetails:async () => 'asset unavailable', removeWorktree:async () => {}
+    };
+    await f.engine.release(true);
+    f.store.setKv('release-retry-after:ticket',0);
+    await f.engine.release(true);
+    assert.equal(reviewed,1);
+    assert.equal(f.store.get('ticket').status,'pr_ready');
+    assert.equal(f.store.getKv('release-pm-repairs:ticket'),'1');
+    assert.equal(f.store.getKv('release-instruction:ticket'),'共有アセットの不変性テストを修正');
+  } finally { f.close(); }
+});
+
 test('scheduler starts release on the next tick when batching is zero', async () => {
   const f = fixture();
   try {

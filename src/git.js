@@ -1,4 +1,4 @@
-import { mkdir, readdir, rm } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { command } from './command.js';
@@ -54,6 +54,8 @@ export class GitHub {
     await command('npm', ['run','build'], { cwd: path, timeoutMs: 20 * 60_000 });
     await command('npm', ['run','test:client'], { cwd: path, timeoutMs: 15 * 60_000 });
     await command('npm', ['run','test:sync'], { cwd: path, timeoutMs: 15 * 60_000 });
+    const scripts = JSON.parse(await readFile(join(path,'package.json'),'utf8')).scripts || {};
+    if (scripts['test:shared-assets']) await command('npm', ['run','test:shared-assets'], { cwd: path, timeoutMs: 15 * 60_000 });
   }
   async issue(title, body) {
     const result = await this.gh(['issue','create','--repo',this.config.githubRepo,'--title',title,'--body',body]);
@@ -112,6 +114,19 @@ export class GitHub {
   async prInfo(number) {
     const result = await this.gh(['pr','view',String(number),'--repo',this.config.githubRepo,'--json','state,headRefOid,headRefName,baseRefName,statusCheckRollup,mergeCommit']);
     return JSON.parse(result.stdout);
+  }
+  async failedCheckDetails(number) {
+    const info = await this.prInfo(number);
+    const failed = (info.statusCheckRollup || []).filter(check => /failure|error|timed_out|cancelled/i.test(check.conclusion || check.status || ''));
+    const summaries = failed.map(check => `${check.name || 'check'}: ${check.conclusion || check.status}`);
+    const runIds = [...new Set(failed.map(check => check.detailsUrl?.match(/\/actions\/runs\/(\d+)/)?.[1]).filter(Boolean))].slice(0,2);
+    for (const runId of runIds) {
+      try {
+        const result = await this.gh(['run','view',runId,'--repo',this.config.githubRepo,'--log-failed'],this.config.repo,{timeoutMs:60_000});
+        summaries.push(`Run ${runId}: ${result.stdout.slice(-9000)}`);
+      } catch (error) { summaries.push(`Run ${runId}: ${String(error.message).slice(-1000)}`); }
+    }
+    return summaries.join('\n').slice(-12_000);
   }
   async checkRunsForCommit(sha) {
     const result = await this.gh(['api',`repos/${this.config.githubRepo}/commits/${sha}/check-runs`]);

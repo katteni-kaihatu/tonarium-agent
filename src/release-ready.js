@@ -47,14 +47,23 @@ const discord = {
   async setThreadStatus(id) {
     return syncThreadStatus(config,store,id);
   },
-  async say(id, text) {
+  async threadOwnerId(id) {
+    const thread = await rest.get(Routes.channel(id));
+    const starter = await rest.get(Routes.channelMessage(thread.parent_id,id)).catch(() => null);
+    return starter?.author && !starter.author.bot ? starter.author.id : null;
+  },
+  async say(id, text, {mentionUserId = ''} = {}) {
     let message = text;
     try {
       const translated = await translator.translate(text);
       message += `\n\n🌐 **翻訳 / Translations / 번역**\n🇯🇵 ${translated.ja}\n🇺🇸 ${translated.en}\n🇰🇷 ${translated.ko}`;
     } catch (error) { console.error('Release notification translation:',error); }
+    const mention = /^\d{17,20}$/.test(mentionUserId) ? `<@${mentionUserId}> ` : '';
+    message = mention + message;
     for (let i = 0; i < message.length; i += 1900) {
-      await rest.post(Routes.channelMessages(id), {body:{content:message.slice(i,i+1900),allowed_mentions:{parse:[]}}});
+      const part = message.slice(i,i+1900);
+      const allowed = mentionUserId && part.includes(mention) ? {users:[mentionUserId]} : {parse:[]};
+      await rest.post(Routes.channelMessages(id), {body:{content:part,allowed_mentions:allowed}});
     }
   }
 };

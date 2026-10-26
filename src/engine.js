@@ -83,7 +83,40 @@ export class Engine {
   async stop() { clearInterval(this.timer); await this.discord.stop(); }
   async receive(id) {
     const status = this.store.get(id)?.status;
+    if (status === 'waiting_info' && this.store.getKv(`awaiting-instruction-stage:${id}`) === 'release') return this.releaseInstruction(id);
     return ['merged','resolved_existing'].includes(status) ? this.followUp(id) : this.feedback(id);
+  }
+  async releaseInstruction(id) {
+    if (this.active.has(id)) return;
+    this.active.add(id);
+    let role;
+    try {
+      const ticket = this.store.get(id);
+      if (!ticket || ticket.status !== 'waiting_info') return;
+      const answer = await this.discord.userMessage?.(id,ticket.last_message_id) || await this.discord.history(id);
+      role = await this.acquireRole('PM',id);
+      const decision = await this.ai.ask(role.name, `出荷検証が2回失敗して停止したPRについて、スレ主から回答がありました。保留・中止の指示なら retry=false。修正または再試行の指示なら retry=true とし、統合担当への具体的な指示を書いてください。返す JSON: {"retry":boolean,"instruction":"統合担当への指示","reason":"判断理由"}。\n\n案件: ${ticket.title}\nPR #${ticket.pr_number}\n失敗: ${ticket.error}\nスレ主の回答: ${answer}`, {provider:this.config.intakeProvider || 'codex',cwd:this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
+      if (decision.retry !== true) {
+        await this.discord.say(id,`**${role.name}｜PM**\n出荷を保留します。${trim(decision.reason || '再開する場合は、このスレッドで指示してください。',500)}`);
+        return;
+      }
+      this.store.setKv(`release-instruction:${id}`,trim(decision.instruction || answer,1500));
+      this.store.setKv(`release-failure-count:${id}`,0);
+      this.store.setKv(`release-pm-repairs:${id}`,0);
+      this.store.setKv(`awaiting-instruction:${id}`,'0');
+      this.store.setKv(`awaiting-instruction-stage:${id}`,'');
+      this.store.setKv(`release-retry-after:${id}`,0);
+      this.store.update(id,{status:'pr_ready',error:null,answered_message_id:ticket.last_message_id});
+      this.event(id,role.id,'pr_ready',`スレ主の指示を受け、PR #${ticket.pr_number} の修正と再検証を再開`);
+      await this.discord.say(id,`**${role.name}｜PM**\n指示を受け取りました。PR #${ticket.pr_number} を修正・再検証します。`);
+      await this.tick();
+    } catch (error) {
+      this.event(id,role?.id || 'pm','instruction_warning',trim(error.message,500));
+      await this.discord.say(id,`**${role?.name || roleName('pm')}｜PM**\n回答の処理に失敗しました。もう一度指示してください。${trim(error.message,300)}`).catch(() => {});
+    } finally {
+      if (role) this.releaseRole(role);
+      this.active.delete(id);
+    }
   }
   async feedback(id) {
     if (this.active.has(id)) { this.pendingFeedback.add(id); return; }
@@ -399,25 +432,56 @@ export class Engine {
       if (role) this.releaseRole(role);
     }
   }
-  async askUserAfterFailures(id,error) {
+  async askUserAfterFailures(id,error,stage = 'code') {
     const message = trim(error?.message || error,2000);
     this.store.setKv(`awaiting-instruction:${id}`,'1');
+    this.store.setKv(`awaiting-instruction-stage:${id}`,stage);
     this.store.setKv(`failed-review-count:${id}`,3);
-    let role, question = '同じ案件で2回失敗しました。作業ツリーは保存しています。続けるために、次に試す修正方針か、いったん保留にするかを指示してください。';
+    let role, question = stage === 'release'
+      ? `PR #${this.store.get(id)?.pr_number} のWebチェックがPMによる修正後も失敗したため、出荷を止めました。修正して再開するか、保留するかを指示してください。`
+      : '同じ案件で2回失敗しました。作業ツリーは保存しています。続けるために、次に試す修正方針か、いったん保留にするかを指示してください。';
+    this.store.update(id,{status:'waiting_info',worker:null,error:message,answered_message_id:this.store.get(id)?.last_message_id});
     try {
       role = await this.acquireRole('PM',id);
-      const worktree = await this.git.resumeTaskWorktree(id).catch(() => null);
-      const result = await this.ai.ask(role.name, `同じ案件が2回失敗しました。自動再試行は止めます。残っている作業ツリーと失敗内容を調べ、ユーザーが次の方針を指示できる具体的な質問を一つ作ってください。技術的な原因は短く説明し、実装の詳細が分からない人にも選べる案を添えます。返す JSON: {"question":"ユーザーへの質問"}。\n\n案件: ${this.store.get(id)?.title}\n失敗: ${message}`, {provider:this.config.intakeProvider || 'codex',cwd:worktree?.path || this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
+      const worktree = stage === 'release' ? null : await this.git.resumeTaskWorktree(id).catch(() => null);
+      const prompt = stage === 'release'
+        ? `同じPRの出荷検証がPMによる修正後も失敗しました。自動再試行を止めました。CIエラーとPRの状態から、スレ主に修正・再開か保留かを選んでもらう具体的な質問を一つ作ってください。技術的な原因を短く説明します。返す JSON: {"question":"ユーザーへの質問"}。\n\n案件: ${this.store.get(id)?.title}\nPR #${this.store.get(id)?.pr_number}\n失敗: ${message}`
+        : `同じ案件が2回失敗しました。自動再試行は止めます。残っている作業ツリーと失敗内容を調べ、ユーザーが次の方針を指示できる具体的な質問を一つ作ってください。技術的な原因は短く説明し、実装の詳細が分からない人にも選べる案を添えます。返す JSON: {"question":"ユーザーへの質問"}。\n\n案件: ${this.store.get(id)?.title}\n失敗: ${message}`;
+      const result = await this.ai.ask(role.name,prompt,{provider:this.config.intakeProvider || 'codex',cwd:worktree?.path || this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
       question = trim(result.question || question,1000);
     } catch (reviewError) {
       this.event(id,role?.id || 'pm','retry_review_warning',trim(reviewError.message,500));
     } finally {
       if (role) this.releaseRole(role);
     }
-    this.store.update(id,{status:'waiting_info',worker:null,error:message});
     this.event(id,'pm','needs_instruction',question);
     const ownerId = await this.discord.threadOwnerId?.(id).catch(() => null);
     await this.discord.say(id,`**${roleName('pm')}｜PM 🙋**\n${question}`,{mentionUserId:ownerId}).catch(error => this.event(id,'pm','discord_warning',trim(error.message,300)));
+  }
+  async pmReviewReleaseFailure(ticket,error) {
+    const id = ticket.id;
+    const repairs = Number(this.store.getKv(`release-pm-repairs:${id}`) || 0);
+    if (repairs >= 2) return this.askUserAfterFailures(id,error,'release');
+    let role;
+    try {
+      role = await this.acquireRole('PM',id);
+      const details = await this.git.failedCheckDetails?.(ticket.pr_number).catch(() => '') || '';
+      const decision = await this.ai.ask(role.name, `出荷段階で同じPRが2回以上失敗しています。CIログとエラーを調べ、統合担当が修正できるなら retry=true とし、具体的な修正指示を書いてください。変更なしの再実行だけは指示しないでください。製品判断や認証など人の判断が必要なら retry=false にしてください。返す JSON: {"retry":boolean,"instruction":"統合担当への修正指示","reason":"判断理由"}。\n\n案件: ${ticket.title}\nPR #${ticket.pr_number}\nエラー: ${trim(error.message,2000)}\nCIログ: ${trim(details,10000)}\nPMによる修正指示: ${repairs}/2`, {provider:this.config.intakeProvider || 'codex',cwd:this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
+      if (decision.retry === true && String(decision.instruction || '').trim()) {
+        this.store.setKv(`release-pm-repairs:${id}`,repairs + 1);
+        this.store.setKv(`release-instruction:${id}`,trim(decision.instruction,1500));
+        this.store.update(id,{status:'pr_ready',error:trim(error.message,2000)});
+        this.store.setKv(`release-retry-after:${id}`,Date.now() + 30_000);
+        this.event(id,role.id,'release_retry',`PMがCI失敗を調査し、統合担当に修正を指示 (${repairs + 1}/2): ${trim(decision.reason,300)}`);
+        await this.discord.say(id,`**${role.name}｜PM**\nPR #${ticket.pr_number} の失敗を確認しました。統合担当に修正と再検証を指示します。${trim(decision.reason,400)}`).catch(() => {});
+        return;
+      }
+    } catch (reviewError) {
+      this.event(id,role?.id || 'pm','retry_review_warning',trim(reviewError.message,500));
+    } finally {
+      if (role) this.releaseRole(role);
+    }
+    await this.askUserAfterFailures(id,error,'release');
   }
   async release(force = false) {
     if (this.releasing) return false;
@@ -483,9 +547,20 @@ export class Engine {
           merged++;
         } catch (error) {
           failedTickets++;
-          this.store.update(ticket.id,{status:'pr_ready',error:trim(error.message,2000)});
-          this.store.setKv(`release-retry-after:${ticket.id}`,Date.now() + 90_000);
-          this.event(ticket.id,'release','release_retry',`この PR は90秒後に再試行します。ほかの PR を先に処理します: ${trim(error.message,500)}`);
+          const key = `release-failure-count:${ticket.id}`;
+          const stored = this.store.getKv(key);
+          const earlier = stored === undefined
+            ? this.store.events(5000).filter(row => row.ticket_id === ticket.id && row.kind === 'release_retry').length
+            : Number(stored) || 0;
+          const failures = Math.min(1,earlier) + 1;
+          this.store.setKv(key,failures);
+          if (failures >= 2) {
+            await this.pmReviewReleaseFailure(ticket,error);
+          } else {
+            this.store.update(ticket.id,{status:'pr_ready',error:trim(error.message,2000)});
+            this.store.setKv(`release-retry-after:${ticket.id}`,Date.now() + 90_000);
+            this.event(ticket.id,'release','release_retry',`この PR は90秒後に再試行します。ほかの PR を先に処理します: ${trim(error.message,500)}`);
+          }
         } finally {
           if (worktree) await this.git.removeWorktree(worktree.path);
         }
@@ -517,7 +592,8 @@ export class Engine {
       } catch (error) {
         if (attempt === 2) throw error;
         this.event(ticket.id,'pm','repair_requested',`統合後の検証失敗を修正 (${attempt + 1}/2): ${trim(error.message,400)}`);
-        const report = await this.ai.code(roleName('integrator'), `最新 main と PR の統合後、検証に失敗しました。現在の作業ツリーの差分を保持し、次のエラーを修正してください。git add/commit/push は行わないでください。案件: ${ticket.title}。エラー: ${trim(error.message,1500)}`, path, {provider:this.config.integrationProvider,requireChangelog:false,timeoutMs:15*60_000});
+        const instruction = this.store.getKv(`release-instruction:${ticket.id}`);
+        const report = await this.ai.code(roleName('integrator'), `最新 main と PR の統合後、検証に失敗しました。現在の作業ツリーの差分を保持し、次のエラーを修正してください。git add/commit/push は行わないでください。案件: ${ticket.title}。${instruction ? `スレ主の指示: ${trim(instruction,1500)}。` : ''}エラー: ${trim(error.message,1500)}`, path, {provider:this.config.integrationProvider,requireChangelog:false,timeoutMs:15*60_000});
         const status = await this.git.git(['status','--porcelain'],path);
         if (!status.stdout) throw new Error('Integrator made no changes to repair the failed check');
         this.event(ticket.id,'integrator','repair_applied',trim(report,300));
@@ -526,6 +602,9 @@ export class Engine {
     }
   }
   async markMerged(ticket,sha) {
+    this.store.setKv(`release-instruction:${ticket.id}`,'');
+    this.store.setKv(`release-failure-count:${ticket.id}`,0);
+    this.store.setKv(`release-pm-repairs:${ticket.id}`,0);
     this.store.update(ticket.id, { status:'merged', error:null, answered_message_id:this.store.get(ticket.id).last_message_id });
     this.event(ticket.id,'release','merged',`PR #${ticket.pr_number} を ${this.config.baseBranch || 'main'} へマージ: ${sha?.slice(0,8) || ''}`);
     await this.threadStatusUpdates.get(ticket.id);
