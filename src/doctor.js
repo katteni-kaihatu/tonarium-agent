@@ -1,17 +1,23 @@
 import { existsSync } from 'node:fs';
-import { getConfig } from './config.js';
+import { getConfig, roles } from './config.js';
+import { AI } from './ai.js';
 import { command } from './command.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client, GatewayIntentBits, PermissionFlagsBits } from 'discord.js';
 
 const config = getConfig();
+const ai = new AI(config);
 const checks = [
   ['Tonarium checkout', existsSync(config.repo), config.repo],
   ['Discord Bot token', Boolean(config.discordToken), 'DISCORD_TOKEN'],
   ['Discord feedback channel', Boolean(config.discordChannelId), config.discordChannelId],
   ['GitHub release branch', Boolean(config.baseBranch), config.baseBranch]
 ];
+try {
+  for (const role of [...roles,{name:'通訳'}]) await ai.guidance(role.name);
+  checks.push(['Role Markdown guidance',true,'WORKFLOW.md and prompts/']);
+} catch (error) { checks.push(['Role Markdown guidance',false,error.message]); }
 if (config.translationProvider === 'openai') checks.push(['OpenAI translation key',Boolean(config.translationApiKey),'OPENAI_API_KEY']);
 const providers = [config.intakeProvider,config.planningProvider,config.codingProvider,config.integrationProvider,config.translationProvider];
 for (const executable of [...new Set(['git','gh',...providers].filter(x => x !== 'codex' && x !== 'openai'))]) {

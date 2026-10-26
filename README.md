@@ -1,5 +1,7 @@
 # Tonarium Agent Studio
 
+エージェント共通の運用方針は `WORKFLOW.md`、担当別の指示は `prompts/` にあります。Bot は Codex または Claude Code を呼ぶ直前に読み直すため、文章の変更は再起動せず次の実行から反映されます。設計の参考にした OSS と今後の改善点は [オーケストレーション調査](docs/orchestration-references.md)にまとめています。
+
 Discord の声を聞き取り、GitHub PR の作成・チェック・`main` へのマージまで進める常駐エージェントです。対象は `.env` の `DISCORD_CHANNEL_ID` で指定した通常のテキストチャンネルです。親チャンネルへ発言すると Bot がそのメッセージから公開スレッドを作り、空いている聞き取り担当が詳細を聞きます。ユーザーが手動で作ったスレッドも受け付けます。
 
 Tonarium リポジトリの既定ブランチ名は `master` ではなく **`main`** です。案件ごとに最初の発言を受けた時点の `main` commit を保存し、その commit の worktree で既存機能を調べ、実装します。後から `main` が進んでも、最初の判断に使ったコードは変わりません。
