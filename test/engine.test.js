@@ -253,10 +253,11 @@ test('PM reviews the second failed Web check and orders a bounded repair', async
     f.store.update('ticket',{status:'pr_ready',branch:'agent/ticket',pr_number:249});
     f.engine.config = {baseBranch:'main',githubRepo:'owner/repo',batchMs:0,maxWorkers:0,autoRelease:false};
     let reviewed = 0;
-    f.engine.ai = {ask:async (_role,prompt) => {
+    f.engine.ai = {ask:async (_role,prompt,options) => {
       if (prompt.includes('出荷段階で同じPR')) {
         reviewed++;
         assert.match(prompt,/asset unavailable/);
+        assert.equal(options.cwd,'candidate');
         return {retry:true,instruction:'共有アセットの不変性テストを修正',reason:'CIの失敗を修正できる'};
       }
       return {notes:''};

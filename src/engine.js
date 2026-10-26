@@ -458,7 +458,7 @@ export class Engine {
     const ownerId = await this.discord.threadOwnerId?.(id).catch(() => null);
     await this.discord.say(id,`**${roleName('pm')}｜PM 🙋**\n${question}`,{mentionUserId:ownerId}).catch(error => this.event(id,'pm','discord_warning',trim(error.message,300)));
   }
-  async pmReviewReleaseFailure(ticket,error) {
+  async pmReviewReleaseFailure(ticket,error,worktreePath = '') {
     const id = ticket.id;
     const repairs = Number(this.store.getKv(`release-pm-repairs:${id}`) || 0);
     if (repairs >= 2) return this.askUserAfterFailures(id,error,'release');
@@ -466,7 +466,7 @@ export class Engine {
     try {
       role = await this.acquireRole('PM',id);
       const details = await this.git.failedCheckDetails?.(ticket.pr_number).catch(() => '') || '';
-      const decision = await this.ai.ask(role.name, `出荷段階で同じPRが2回以上失敗しています。CIログとエラーを調べ、統合担当が修正できるなら retry=true とし、具体的な修正指示を書いてください。変更なしの再実行だけは指示しないでください。製品判断や認証など人の判断が必要なら retry=false にしてください。返す JSON: {"retry":boolean,"instruction":"統合担当への修正指示","reason":"判断理由"}。\n\n案件: ${ticket.title}\nPR #${ticket.pr_number}\nエラー: ${trim(error.message,2000)}\nCIログ: ${trim(details,10000)}\nPMによる修正指示: ${repairs}/2`, {provider:this.config.intakeProvider || 'codex',cwd:this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
+      const decision = await this.ai.ask(role.name, `出荷段階で同じPRが2回以上失敗しています。CIログとエラーと作業ツリーのコードを調べ、統合担当が修正できるなら retry=true とし、具体的な修正指示を書いてください。変更なしの再実行だけは指示しないでください。製品判断や認証など人の判断が必要なら retry=false にしてください。返す JSON: {"retry":boolean,"instruction":"統合担当への修正指示","reason":"判断理由"}。\n\n案件: ${ticket.title}\nPR #${ticket.pr_number}\nエラー: ${trim(error.message,2000)}\nCIログ: ${trim(details,10000)}\nPMによる修正指示: ${repairs}/2`, {provider:this.config.intakeProvider || 'codex',cwd:worktreePath || this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
       if (decision.retry === true && String(decision.instruction || '').trim()) {
         this.store.setKv(`release-pm-repairs:${id}`,repairs + 1);
         this.store.setKv(`release-instruction:${id}`,trim(decision.instruction,1500));
@@ -555,7 +555,7 @@ export class Engine {
           const failures = Math.min(1,earlier) + 1;
           this.store.setKv(key,failures);
           if (failures >= 2) {
-            await this.pmReviewReleaseFailure(ticket,error);
+            await this.pmReviewReleaseFailure(ticket,error,worktree?.path);
           } else {
             this.store.update(ticket.id,{status:'pr_ready',error:trim(error.message,2000)});
             this.store.setKv(`release-retry-after:${ticket.id}`,Date.now() + 90_000);
