@@ -11,7 +11,7 @@ export class Store {
         id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
         summary TEXT NOT NULL DEFAULT '', criteria TEXT NOT NULL DEFAULT '[]',
         issue_number INTEGER, pr_number INTEGER, branch TEXT, worker TEXT,
-        last_message_id TEXT, answered_message_id TEXT, parent_ticket_id TEXT, decision_thread_id TEXT, base_sha TEXT,
+        last_message_id TEXT, answered_message_id TEXT, parent_ticket_id TEXT, decision_thread_id TEXT, base_sha TEXT, merged_branch TEXT,
         error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS events (
@@ -26,6 +26,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
     if (!this.db.prepare('PRAGMA table_info(tickets)').all().some(column => column.name === 'base_sha')) this.db.exec('ALTER TABLE tickets ADD COLUMN base_sha TEXT');
     if (!this.db.prepare('PRAGMA table_info(tickets)').all().some(column => column.name === 'answered_message_id')) this.db.exec('ALTER TABLE tickets ADD COLUMN answered_message_id TEXT');
+    if (!this.db.prepare('PRAGMA table_info(tickets)').all().some(column => column.name === 'merged_branch')) {
+      this.db.exec("ALTER TABLE tickets ADD COLUMN merged_branch TEXT; UPDATE tickets SET merged_branch='main' WHERE status='merged'");
+    }
   }
   get(id) { return this.db.prepare('SELECT * FROM tickets WHERE id=?').get(id); }
   list() { return this.db.prepare('SELECT * FROM tickets ORDER BY updated_at DESC LIMIT 200').all(); }
@@ -35,7 +38,7 @@ export class Store {
     return this.get(id);
   }
   update(id, patch) {
-    const allowed = ['title','status','summary','criteria','issue_number','pr_number','branch','worker','last_message_id','answered_message_id','parent_ticket_id','decision_thread_id','base_sha','error'];
+    const allowed = ['title','status','summary','criteria','issue_number','pr_number','branch','worker','last_message_id','answered_message_id','parent_ticket_id','decision_thread_id','base_sha','merged_branch','error'];
     const entries = Object.entries(patch).filter(([key]) => allowed.includes(key));
     if (!entries.length) return this.get(id);
     const sql = entries.map(([key]) => `${key}=?`).join(',');

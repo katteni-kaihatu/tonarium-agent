@@ -25,8 +25,8 @@ export class Dashboard {
       tickets,
       events: this.store.events(),
       releases,
-      mainUrl: `https://github.com/${this.config.githubRepo}/tree/${this.config.baseBranch || 'main'}`,
-      releaseBranch: this.config.baseBranch || 'main'
+      mainUrl: `https://github.com/${this.config.githubRepo}/tree/${this.config.baseBranch || 'develop'}`,
+      releaseBranch: this.config.baseBranch || 'develop'
     };
   }
   notify() {

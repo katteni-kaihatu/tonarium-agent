@@ -10,15 +10,15 @@ export class GitHub {
   async prepare() {
     this.prepareLock = (this.prepareLock || Promise.resolve()).catch(() => {}).then(async () => {
       await mkdir(this.worktrees, { recursive: true });
-      await this.git(['fetch','origin',this.config.baseBranch || 'main']);
+      await this.git(['fetch','origin',this.config.baseBranch || 'develop']);
     });
     return this.prepareLock;
   }
   async baseHead() {
     await this.prepare();
-    return (await this.git(['rev-parse',`origin/${this.config.baseBranch || 'main'}`])).stdout;
+    return (await this.git(['rev-parse',`origin/${this.config.baseBranch || 'develop'}`])).stdout;
   }
-  async worktree(name, base = `origin/${this.config.baseBranch || 'main'}`) {
+  async worktree(name, base = `origin/${this.config.baseBranch || 'develop'}`) {
     await mkdir(this.worktrees, { recursive: true });
     const path = join(this.worktrees, name.replace(/[^a-zA-Z0-9_-]/g, '-'));
     const branch = `agent/${name.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
@@ -47,7 +47,7 @@ export class GitHub {
     await rm(path, { recursive: true, force: true }).catch(() => {});
   }
   async test(path) {
-    const base = (await this.git(['merge-base','HEAD',`origin/${this.config.baseBranch || 'main'}`],path)).stdout;
+    const base = (await this.git(['merge-base','HEAD',`origin/${this.config.baseBranch || 'develop'}`],path)).stdout;
     if (await this.changelogCheck(path,base) === 'missing') throw new Error('Every PR must add a new dated entry to shared/changelog.ts');
     await command('npm', ['ci'], { cwd: path, timeoutMs: 15 * 60_000 });
     await command('npm', ['run','typecheck'], { cwd: path, timeoutMs: 15 * 60_000 });
@@ -62,12 +62,15 @@ export class GitHub {
     return Number(result.stdout.match(/\/(\d+)\s*$/)?.[1]) || null;
   }
   async pr(title, body, branch) {
-    const result = await this.gh(['pr','create','--repo',this.config.githubRepo,'--base',this.config.baseBranch || 'main','--head',branch,'--title',title,'--body',body]);
+    const result = await this.gh(['pr','create','--repo',this.config.githubRepo,'--base',this.config.baseBranch || 'develop','--head',branch,'--title',title,'--body',body]);
     return Number(result.stdout.match(/\/(\d+)\s*$/)?.[1]) || null;
   }
   async findPr(branch) {
     const result = await this.gh(['pr','list','--repo',this.config.githubRepo,'--head',branch,'--state','open','--json','number','--limit','1']);
     return JSON.parse(result.stdout || '[]')[0]?.number || null;
+  }
+  async retargetPr(number) {
+    await this.gh(['pr','edit',String(number),'--repo',this.config.githubRepo,'--base',this.config.baseBranch || 'develop']);
   }
   async closeIssue(number, note) {
     if (!number) return;
@@ -94,7 +97,7 @@ export class GitHub {
     throw lastError;
   }
   async mergeMainInto(path) {
-    await this.git(['merge','--no-edit',`origin/${this.config.baseBranch || 'main'}`], path);
+    await this.git(['merge','--no-edit',`origin/${this.config.baseBranch || 'develop'}`], path);
   }
   async pushBranch(path, branch) {
     await this.git(['push','origin',`HEAD:refs/heads/${branch}`],path);
@@ -183,7 +186,7 @@ export class GitHub {
   async mergePr(number, expectedHead) {
     const before = await this.prInfo(number);
     if (before.state === 'MERGED') return before.mergeCommit?.oid || null;
-    if (before.baseRefName !== (this.config.baseBranch || 'main')) throw new Error(`PR #${number} targets ${before.baseRefName}`);
+    if (before.baseRefName !== (this.config.baseBranch || 'develop')) throw new Error(`PR #${number} targets ${before.baseRefName}`);
     if (before.headRefOid !== expectedHead) throw new Error(`PR #${number} head changed before merge`);
     await this.gh(['pr','merge',String(number),'--repo',this.config.githubRepo,'--merge','--match-head-commit',expectedHead]);
     const after = await this.prInfo(number);

@@ -2,9 +2,9 @@
 
 エージェント共通の運用方針は `WORKFLOW.md`、担当別の指示は `prompts/` にあります。Bot は Codex または Claude Code を呼ぶ直前に読み直すため、文章の変更は再起動せず次の実行から反映されます。設計の参考にした OSS と今後の改善点は [オーケストレーション調査](docs/orchestration-references.md)にまとめています。
 
-Discord の声を聞き取り、GitHub PR の作成・チェック・`main` へのマージまで進める常駐エージェントです。対象は `.env` の `DISCORD_CHANNEL_ID` で指定した通常のテキストチャンネルです。親チャンネルへ発言すると Bot がそのメッセージから公開スレッドを作り、空いている聞き取り担当が詳細を聞きます。ユーザーが手動で作ったスレッドも受け付けます。
+Discord の声を聞き取り、GitHub PR の作成・チェック・`develop` へのマージまで進める常駐エージェントです。対象は `.env` の `DISCORD_CHANNEL_ID` で指定した通常のテキストチャンネルです。親チャンネルへ発言すると Bot がそのメッセージから公開スレッドを作り、空いている聞き取り担当が詳細を聞きます。ユーザーが手動で作ったスレッドも受け付けます。
 
-Tonarium リポジトリの既定ブランチ名は `master` ではなく **`main`** です。案件ごとに最初の発言を受けた時点の `main` commit を保存し、その commit の worktree で既存機能を調べ、実装します。後から `main` が進んでも、最初の判断に使ったコードは変わりません。
+Tonarium リポジトリの既定ブランチは `main` ですが、この Bot の開発先は **`develop`** です。案件ごとに最初の発言を受けた時点の `develop` commit を保存し、その commit の worktree で既存機能を調べ、実装します。後から `develop` が進んでも、最初の判断に使ったコードは変わりません。
 
 ```mermaid
 flowchart LR
@@ -15,13 +15,13 @@ flowchart LR
   Forum --> S
   S --> A[開発リード 5人]
   A --> Workers[実装 15人 / 並列 worktree]
-  Workers --> PR[main 宛ての PR]
-  PR --> I[すず / 最新 main との統合・競合解決・テスト]
+  Workers --> PR[develop 宛ての PR]
+  PR --> I[すず / 最新 develop との統合・競合解決・テスト]
   I --> M[みのり / GitHub チェック確認・PR マージ]
-  M --> Main[main]
-  Main --> Q[完了後のスレッドで実装質問]
+  M --> Develop[develop]
+  Develop --> Q[完了後のスレッドで実装質問]
   Q --> Help[あん / 現在のコードと PR を調べて回答]
-  Main --> Bug[完了後のスレッドで不具合報告]
+  Develop --> Bug[完了後のスレッドで不具合報告]
   Bug --> Repair[元の PR にひも付けた新規修正スレッド]
   Repair --> H
 ```
@@ -32,11 +32,11 @@ flowchart LR
 
 ユーザーの発言と Bot の返答は、同じスレッドに **日本語・英語・韓国語**を併記します。元の発言は消しません。判断用フォーラムの会話も翻訳します。翻訳が失敗しても元の発言の聞き取りは続けます。マージ後や既存機能の案内後も同じスレッドで質問できます。実装案内の「あん」が PR と現在のコードを確認し、質問には回答します。不具合・回帰・修正依頼なら元の PR を引き継ぐ新規スレッドを作り、聞き取りから再開します。再現情報が足りなければ元スレッドで質問します。元の案件は完了状態のままです。
 
-Discord のスレッド名には現在の案件状態を「🛠️ 実装中｜件名」「✅ mainへマージ済み｜件名」のように絵文字と日本語で表示します。Discord の変更回数制限で更新できない場合は、保存された状態に合わせて再試行します。Web ボードにも状態の絵文字を表示し、失敗した案件は「要対応」欄に残します。
+Discord のスレッド名には現在の案件状態を「🛠️ 実装中｜件名」「✅ developへマージ済み｜件名」のように絵文字と日本語で表示します。以前 `main` へ入れた案件はそのまま `main` と表示します。Discord の変更回数制限で更新できない場合は、保存された状態に合わせて再試行します。Web ボードにも状態の絵文字を表示し、失敗した案件は「要対応」欄に残します。
 
 Bot が停止していた間に完了済みスレッドへ届いた質問も、再起動時に完了時刻と最終発言を比べて拾います。個別のスレッドで実装案内をすぐ動かすには `npm run answer:thread -- <Discord スレッド ID>` を使います。
 
-実装担当は最大 15 件を並列処理します。各案件で `npm ci`、`npm run typecheck`、`npm run build`、`npm run test:client`、`npm run test:sync` を通してから PR を作ります。すずは PR ブランチへ最新 `main` を取り込み、競合を解決し、統合状態で同じチェックを実行します。みのりは GitHub の Web チェックと実行対象のワークフローすべての完了を待ち、PR の head commit を確認して `main` にマージします。チェックが現れない場合もマージしません。複数 PR は一件ずつ最新 `main` へ合わせます。
+実装担当は最大 15 件を並列処理します。各案件で `npm ci`、`npm run typecheck`、`npm run build`、`npm run test:client`、`npm run test:sync` を通してから PR を作ります。すずは PR ブランチへ最新 `develop` を取り込み、競合を解決し、統合状態で同じチェックを実行します。みのりは GitHub の Web チェックと実行対象のワークフローすべての完了を待ち、PR の head commit を確認して `develop` にマージします。チェックが現れない場合もマージしません。複数 PR は一件ずつ最新 `develop` へ合わせます。
 
 ## セットアップ
 
@@ -60,7 +60,7 @@ npm start
 | `DISCORD_DECISION_MENTION_ID` | 任意。判断投稿で呼ぶユーザー ID。 |
 | `TONARIUM_REPO` | Tonarium の既存 checkout。初期値 `C:\Users\neo\GitHub\tonarium-prototype`。 |
 | `GITHUB_REPO` | `katteni-kaihatu/tonarium-prototype`。`gh auth login` の書き込み権限が必要。 |
-| `RELEASE_BRANCH` | `main`。 |
+| `RELEASE_BRANCH` | `develop`。 |
 | `INTAKE_PROVIDER` | 聞き取り5人に使う `codex` または `claude`。既定 `codex`。 |
 | `PLANNING_PROVIDER` | PM・リード・出荷・実装案内に使う `codex` または `claude`。既定 `codex`。 |
 | `CODING_PROVIDER` / `INTEGRATION_PROVIDER` | 実装・競合解決に使う `codex` または `claude`。 |
@@ -73,7 +73,7 @@ npm start
 | `REQUIRED_PR_CHECK` | GitHub で成功を待つチェック名。既定 `web`。 |
 | `AUTO_RELEASE` | Bot 内蔵の出荷巡回。独立した `TonariumAgentRelease` を使う構成では `false`。 |
 
-独立した出荷タスクが15秒ごとに出荷待ちの PR を確認します。すでに出荷待ちの PR を手動で即時処理する場合は `npm run release:ready` を実行できます。出荷担当が最新 `main` への統合、ローカルテスト、GitHub チェック、PR マージを順番に行います。
+独立した出荷タスクが15秒ごとに出荷待ちの PR を確認します。すでに出荷待ちの PR を手動で即時処理する場合は `npm run release:ready` を実行できます。出荷担当が最新 `develop` への統合、ローカルテスト、GitHub チェック、PR マージを順番に行います。
 
 一時的な GitHub push 失敗は同じコミットを再送します。それでも失敗した場合や実装テストで失敗した場合は、PM がエラーと作業ツリーを確認して再作業を指示します。出荷段階で同じPRが2回失敗した場合は、PMがCIログを調べて統合担当に修正を指示します。PMの修正指示を2回試しても解決しない場合や人の判断が必要な場合は自動再試行を止め、スレッドの投稿者にメンションして次の指示を聞きます。回答後は同じPRから再開できます。Tonarium 本体の Web checks はすべての PR に `changelog/` の新規 JSON を要求します。出荷時に漏れを見つけた場合は統合担当が追記してからチェックを再実行します。統合後のテスト失敗も統合担当が修正と再検証を行い、1件の失敗でほかの出荷待ち PR が止まらないようにします。
 
@@ -98,4 +98,4 @@ Start-ScheduledTask -TaskName TonariumAgentTunnel
 Start-ScheduledTask -TaskName TonariumAgentRelease
 ```
 
-`.data/state.sqlite` に案件、受信時の `main` commit、出荷履歴を保存します。`.worktrees/` は作業コピーです。実装中に Bot が再起動した場合は残った作業コピーと GitHub Issue を再利用します。これらと `.env` は Git に含めません。
+`.data/state.sqlite` に案件、受信時の `develop` commit、出荷履歴を保存します。`.worktrees/` は作業コピーです。実装中に Bot が再起動した場合は残った作業コピーと GitHub Issue を再利用します。これらと `.env` は Git に含めません。

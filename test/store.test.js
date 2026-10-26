@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../src/store.js';
 
 test('ticket state and events survive a restart; interrupted work is queued', () => {
@@ -24,5 +25,22 @@ test('ticket state and events survive a restart; interrupted work is queued', ()
     assert.equal(store.get('thread-1').answered_message_id,'answer-1');
     assert.equal(store.events()[0].text,'着手');
     store.close();
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('existing merged tickets retain their main branch label after migration', () => {
+  const dir = mkdtempSync(join(tmpdir(),'tonarium-store-migrate-'));
+  const path = join(dir,'state.sqlite');
+  try {
+    const store = new Store(path);
+    store.create('old-ticket','以前の案件');
+    store.update('old-ticket',{status:'merged'});
+    store.close();
+    const db = new DatabaseSync(path);
+    db.exec('ALTER TABLE tickets DROP COLUMN merged_branch');
+    db.close();
+    const migrated = new Store(path);
+    assert.equal(migrated.get('old-ticket').merged_branch,'main');
+    migrated.close();
   } finally { rmSync(dir,{recursive:true,force:true}); }
 });

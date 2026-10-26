@@ -17,6 +17,18 @@ function fixture() {
   return { store, sent, engine, dir, close: () => { store.close(); rmSync(dir,{recursive:true,force:true}); } };
 }
 
+test('completed develop merge records the target branch', async () => {
+  const f = fixture();
+  try {
+    f.engine.config.baseBranch = 'develop';
+    f.store.create('ticket','修正');
+    f.store.update('ticket',{status:'pr_ready',pr_number:12});
+    await f.engine.markMerged(f.store.get('ticket'),'merge-sha');
+    assert.equal(f.store.get('ticket').merged_branch,'develop');
+    assert.match(f.sent[0].text,/develop にマージ/);
+  } finally { f.close(); }
+});
+
 test('Discord thread status updates stay in event order', async () => {
   const f = fixture();
   try {

@@ -17,5 +17,6 @@ test('intake and leads each have five agents and implementation has fifteen', ()
 
 test('all agent roles default to Codex subscription', () => {
   const config = getConfig({});
+  assert.equal(config.baseBranch,'develop');
   for (const key of ['intakeProvider','planningProvider','codingProvider','integrationProvider','translationProvider']) assert.equal(config[key],'codex');
 });

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
-import { syncThreadStatus, threadStatusName } from '../src/thread-status.js';
+import { syncThreadStatus, threadStatusFor, threadStatusName } from '../src/thread-status.js';
 
 test('thread status uses the saved ticket state after a Discord rate limit', async () => {
   const dir = mkdtempSync(join(tmpdir(),'tonarium-thread-status-'));
@@ -34,6 +34,8 @@ test('thread status uses the saved ticket state after a Discord rate limit', asy
     assert.equal(patches[1],'🛠️ 実装中｜二段ジャンプ');
     assert.equal(store.getKv('thread-status-dirty:thread-1'),'0');
     assert.equal(threadStatusName('🛠️ 実装中｜二段ジャンプ',{emoji:'✅',label:'mainへマージ済み'}),'✅ mainへマージ済み｜二段ジャンプ');
+    store.update('thread-1',{status:'merged',merged_branch:'develop'});
+    assert.deepEqual(threadStatusFor(store.get('thread-1'),store),{emoji:'✅',label:'developへマージ済み'});
     store.update('thread-1',{status:'pr_ready'});
     store.setKv('thread-status-retry-after:thread-1',0);
     const names = [];

@@ -6,6 +6,21 @@ class TestGitHub extends GitHub {
   async workflowRunsForCommit() { return []; }
 }
 
+test('new PRs target develop and an old main PR is retargeted before release', async () => {
+  const git = new TestGitHub({baseBranch:'develop',githubRepo:'owner/repo'},process.cwd());
+  const calls = [];
+  git.gh = async args => {
+    calls.push(args);
+    return {stdout:args[1] === 'create' ? 'https://github.com/owner/repo/pull/42' : ''};
+  };
+  assert.equal(await git.pr('Title','Body','agent/task-1'),42);
+  await git.retargetPr(42);
+  assert.deepEqual(calls[0].slice(0,8),['pr','create','--repo','owner/repo','--base','develop','--head','agent/task-1']);
+  assert.deepEqual(calls[1],['pr','edit','42','--repo','owner/repo','--base','develop']);
+  git.prInfo = async () => ({state:'OPEN',baseRefName:'main',headRefOid:'tested-sha'});
+  await assert.rejects(git.mergePr(42,'tested-sha'),/targets main/);
+});
+
 test('release accepts completed PR checks for the exact tested head', async () => {
   const git = new TestGitHub({checksTimeoutMs:1000},process.cwd());
   git.prInfo = async () => ({headRefOid:'tested-sha',statusCheckRollup:[{name:'Web checks',conclusion:'SUCCESS'}]});
