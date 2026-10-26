@@ -1,6 +1,6 @@
 # Tonarium Agent のオーケストレーション調査
 
-調査日: 2026-10-26。Discord で受けた声を並列に実装し、CI を通した PR を main へマージする現在の運用を対象にした。各プロジェクトの公開資料とコード上の仕様を読み、Tonarium Agent に取り込める点を選んだ。
+調査日: 2026-10-26。Discord で受けた声を並列に実装し、CI を通した PR を開発ブランチへマージする運用を対象にした。現在の開発・マージ先は `develop`。各プロジェクトの公開資料とコード上の仕様を読み、Tonarium Agent に取り込める点を選んだ。
 
 ## 結論
 
@@ -11,7 +11,7 @@
 | プロジェクト | 確認した実装・方針 | Tonarium での扱い |
 | --- | --- | --- |
 | [OpenAI Symphony](https://github.com/openai/symphony/blob/main/SPEC.md) | `WORKFLOW.md` をリポジトリで管理し、作業単位の隔離、同時実行数、失敗時の再試行、稼働状態の照合をオーケストレータが担当する。変更した方針は次の実行へ反映する。 | `WORKFLOW.md` と `prompts/` を追加し、各 AI 呼び出し時に読み込む。既存の worktree と SQLite の状態管理は継続する。 |
-| [Issue-Orchestrator](https://github.com/issue-orchestrator/issue-orchestrator) | 案件ごとの worktree、検証対象の正確なコミット、回数を区切った再作業、再起動後の状態照合を重視する。エージェントの「終わった」という報告だけで次へ進めない。 | 既存のローカルテスト、PR head に対する CI 確認、PM による再作業判断を維持する。このプロジェクトは人がマージする設計だが、Tonarium はユーザーの希望どおり条件を満たした PR を自動マージする。 |
+| [Issue-Orchestrator](https://github.com/issue-orchestrator/issue-orchestrator) | 案件ごとの worktree、検証対象の正確なコミット、回数を区切った再作業、再起動後の状態照合を重視する。エージェントの「終わった」という報告だけで次へ進めない。 | 既存のローカルテスト、PR head に対する CI 確認、PM による再作業判断を維持する。このプロジェクトは人がマージする設計だが、Tonarium はユーザーの希望どおり条件を満たした PR を `develop` に自動マージする。 |
 | [GitHub Agentic Workflows](https://github.com/github/gh-aw) | Markdown で判断が要る仕事を記述し、ビルドやテストは通常の CI で確定する。GitHub への書き込みは別の権限境界で検証して行う。 | Bot の役割指示を Markdown 化する。テスト・PR 作成・マージの判定は引き続きコードと GitHub の結果に置き、AI の文章だけで成功扱いにしない。 |
 | [Symphony の Rust 実装](https://github.com/lilCnid/symphony) | Codex と Claude Code を実行層として切り替えられる。状態が進まない案件の連続実行に上限を設ける。 | 既存の `codex` / `claude` 切り替えと回数制限を維持する。今後、同じ状態で終了と再起動を繰り返す案件の検出を追加する。 |
 

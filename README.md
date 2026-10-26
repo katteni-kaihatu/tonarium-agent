@@ -50,7 +50,7 @@ npm run doctor
 npm start
 ```
 
-既存の `.env` はそのまま使えます。旧 `NIGHTLY_BRANCH` と `COOLIFY_*` は現在の出荷フローでは参照しません。必要な設定は次の通りです。
+既存の `.env` を使う場合は `RELEASE_BRANCH=develop` に変更してください。旧 `NIGHTLY_BRANCH` と `COOLIFY_*` は現在の出荷フローでは参照しません。必要な設定は次の通りです。
 
 | 設定 | 内容 |
 | --- | --- |
