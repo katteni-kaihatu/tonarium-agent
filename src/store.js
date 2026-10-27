@@ -23,22 +23,48 @@ export class Store {
         deployment_id TEXT, tickets TEXT NOT NULL DEFAULT '[]', url TEXT, error TEXT,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS ticket_rounds (
+        ticket_id TEXT NOT NULL, round INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '',
+        criteria TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL, issue_number INTEGER, pr_number INTEGER, branch TEXT,
+        merged_branch TEXT, created_at INTEGER NOT NULL, PRIMARY KEY (ticket_id, round)
+      );`);
     if (!this.db.prepare('PRAGMA table_info(tickets)').all().some(column => column.name === 'base_sha')) this.db.exec('ALTER TABLE tickets ADD COLUMN base_sha TEXT');
     if (!this.db.prepare('PRAGMA table_info(tickets)').all().some(column => column.name === 'answered_message_id')) this.db.exec('ALTER TABLE tickets ADD COLUMN answered_message_id TEXT');
+    if (!this.db.prepare('PRAGMA table_info(tickets)').all().some(column => column.name === 'round')) this.db.exec('ALTER TABLE tickets ADD COLUMN round INTEGER NOT NULL DEFAULT 1');
     if (!this.db.prepare('PRAGMA table_info(tickets)').all().some(column => column.name === 'merged_branch')) {
       this.db.exec("ALTER TABLE tickets ADD COLUMN merged_branch TEXT; UPDATE tickets SET merged_branch='main' WHERE status='merged'");
     }
   }
   get(id) { return this.db.prepare('SELECT * FROM tickets WHERE id=?').get(id); }
   list() { return this.db.prepare('SELECT * FROM tickets ORDER BY updated_at DESC LIMIT 200').all(); }
+  byStatus(statuses) {
+    if (!statuses.length) return [];
+    return this.db.prepare(`SELECT * FROM tickets WHERE status IN (${statuses.map(() => '?').join(',')}) ORDER BY updated_at ASC`).all(...statuses);
+  }
+  byPr(numbers) {
+    if (!numbers.length) return [];
+    const marks = numbers.map(() => '?').join(',');
+    const current = this.db.prepare(`SELECT id FROM tickets WHERE pr_number IN (${marks})`).all(...numbers);
+    const past = this.db.prepare(`SELECT ticket_id AS id FROM ticket_rounds WHERE pr_number IN (${marks})`).all(...numbers);
+    return [...new Set([...current,...past].map(row => row.id))].map(id => this.get(id)).filter(Boolean);
+  }
+  rounds(id) { return this.db.prepare('SELECT * FROM ticket_rounds WHERE ticket_id=? ORDER BY round ASC').all(id); }
+  archiveRound(ticket) {
+    this.db.prepare('INSERT OR REPLACE INTO ticket_rounds (ticket_id,round,title,summary,criteria,status,issue_number,pr_number,branch,merged_branch,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+      .run(ticket.id,ticket.round || 1,ticket.title,ticket.summary,ticket.criteria,ticket.status,ticket.issue_number ?? null,ticket.pr_number ?? null,ticket.branch ?? null,ticket.merged_branch ?? null,Date.now());
+  }
+  markRoundsMerged(id,numbers,branch) {
+    if (!numbers.length) return;
+    this.db.prepare(`UPDATE ticket_rounds SET merged_branch=? WHERE ticket_id=? AND pr_number IN (${numbers.map(() => '?').join(',')})`).run(branch,id,...numbers);
+  }
   create(id, title, lastMessageId = '') {
     const now = Date.now();
     this.db.prepare('INSERT OR IGNORE INTO tickets (id,title,status,last_message_id,created_at,updated_at) VALUES (?,?,?,?,?,?)').run(id, title, 'intake', lastMessageId, now, now);
     return this.get(id);
   }
   update(id, patch) {
-    const allowed = ['title','status','summary','criteria','issue_number','pr_number','branch','worker','last_message_id','answered_message_id','parent_ticket_id','decision_thread_id','base_sha','merged_branch','error'];
+    const allowed = ['title','status','summary','criteria','issue_number','pr_number','branch','worker','last_message_id','answered_message_id','parent_ticket_id','decision_thread_id','base_sha','merged_branch','error','round'];
     const entries = Object.entries(patch).filter(([key]) => allowed.includes(key));
     if (!entries.length) return this.get(id);
     const sql = entries.map(([key]) => `${key}=?`).join(',');

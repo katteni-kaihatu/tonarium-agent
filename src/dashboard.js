@@ -20,6 +20,7 @@ export class Dashboard {
       roles: roles.map(role => {
         const status = { pm:['planning','decision'], integrator:['integrating'], release:['pr_ready'] }[role.id];
         const assigned = this.engine.roleBusy.get(role.id);
+        if (role.id === 'mainrelease') return { ...role, ticket: this.store.getKv('main-release:status') || '' };
         return { ...role, ticket: tickets.find(ticket => ticket.id === assigned || ticket.worker === role.id)?.title || tickets.find(ticket => status?.includes(ticket.status))?.title || (role.id === 'release' && this.engine.releasing ? 'PR を確認・マージ中' : '') };
       }),
       tickets,

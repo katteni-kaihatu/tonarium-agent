@@ -7,6 +7,7 @@ import { AI } from './ai.js';
 import { GitHub } from './git.js';
 import { Translator } from './translation.js';
 import { Engine } from './engine.js';
+import { historyLine } from './discord.js';
 
 const id = process.argv[2];
 if (!/^\d{17,20}$/.test(id || '')) throw new Error('Pass a Discord thread ID');
@@ -24,27 +25,28 @@ const discord = {
   },
   async history(threadId) {
     const messages = await rest.get(Routes.channelMessages(threadId),{query:new URLSearchParams({limit:'100'})});
-    return messages.filter(message => !message.author?.bot || message.content?.startsWith('🛠️ 修正依頼の引き継ぎ')).sort((a,b) => Date.parse(a.timestamp)-Date.parse(b.timestamp))
-      .map(message => `${message.author?.username || 'user'}: ${message.content || '[添付のみ]'}`).join('\n').slice(-20_000);
+    const botId = (await rest.get(Routes.user('@me'))).id;
+    return messages.sort((a,b) => Date.parse(a.timestamp)-Date.parse(b.timestamp))
+      .map(message => historyLine({...message,attachments:new Map((message.attachments || []).map(attachment => [attachment.id,attachment]))},botId)).filter(Boolean).join('\n').slice(-20_000);
   },
   async url(threadId) {
     const thread = await rest.get(Routes.channel(threadId));
     return `https://discord.com/channels/${thread.guild_id}/${threadId}`;
   },
-  async createFollowUp(ticket,report,title) {
-    const thread = await rest.post(Routes.threads(config.discordChannelId),{body:{name:`修正｜${title || ticket.title}`.slice(0,100),type:ChannelType.PublicThread,auto_archive_duration:1440}});
-    const originalUrl = `https://discord.com/channels/${thread.guild_id}/${ticket.id}`;
-    await rest.post(Routes.channelMessages(thread.id),{body:{content:`🛠️ 修正依頼の引き継ぎ\n元のフィードバック: ${originalUrl}\n元のPR: ${ticket.pr_number ? `#${ticket.pr_number}` : 'なし'}\n報告: ${report}`.slice(0,1900),allowed_mentions:{parse:[]}}});
-    return {id:thread.id,url:`https://discord.com/channels/${thread.guild_id}/${thread.id}`};
+  async threadOwnerId(threadId) {
+    const thread = await rest.get(Routes.channel(threadId));
+    const starter = await rest.get(Routes.channelMessage(thread.parent_id,threadId)).catch(() => null);
+    return starter?.author && !starter.author.bot ? starter.author.id : thread.owner_id || null;
   },
-  async say(threadId,text) {
-    let message = text;
+  async say(threadId,text,{mentionUserId = ''} = {}) {
+    let message = `${/^\d{17,20}$/.test(mentionUserId) ? `<@${mentionUserId}> ` : ''}${text}`;
     try {
       const translated = await translator.translate(text);
       message += `\n\n🌐 **翻訳 / Translations / 번역**\n🇯🇵 ${translated.ja}\n🇺🇸 ${translated.en}\n🇰🇷 ${translated.ko}`;
     } catch (error) { console.error('Answer translation:',error); }
     for (let offset = 0; offset < message.length; offset += 1900) {
-      await rest.post(Routes.channelMessages(threadId),{body:{content:message.slice(offset,offset+1900),allowed_mentions:{parse:[]}}});
+      const part = message.slice(offset,offset+1900);
+      await rest.post(Routes.channelMessages(threadId),{body:{content:part,allowed_mentions:mentionUserId && part.includes(`<@${mentionUserId}>`) ? {users:[mentionUserId]} : {parse:[]}}});
     }
   }
 };
@@ -52,6 +54,8 @@ const discord = {
 try {
   if (!store.get(id)) throw new Error(`Thread ${id} is not a known ticket`);
   const engine = new Engine(config,store,ai,git,discord);
+  // 続きの対応を始める場合は、常駐 Bot が聞き取りを引き継ぐ
+  engine.deferRounds = true;
   await engine.followUp(id);
   console.log(`Completed-thread follow-up checked for ${id}.`);
 } finally { store.close(); }

@@ -4,6 +4,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { syncThreadStatus } from './thread-status.js';
 
+const translationBlock = '\n\n🌐 **翻訳 / Translations / 번역**';
+
+// 翻訳の併記は同じ内容の繰り返しなので、AI に渡す会話から外す
+export function historyLine(message, botId) {
+  const own = message.author?.id === botId;
+  if (message.author?.bot && !own) return '';
+  const content = String(message.content || '');
+  if (own && content.startsWith('🌐 **')) return '';
+  const text = own ? content.split(translationBlock)[0].trim() : content;
+  const attachments = message.attachments?.size ? ` [添付: ${[...message.attachments.values()].map(x => x.url).join(', ')}]` : '';
+  return `${own ? `Bot(${message.author.username})` : message.author?.username || 'user'}: ${text || '[添付のみ]'}${attachments}`;
+}
+
 function chunk(text, limit = 1900) {
   const result = [];
   for (let i = 0; i < text.length; i += limit) result.push(text.slice(i, i + limit));
@@ -32,7 +45,7 @@ export class DiscordTransport {
       const starter = await thread.fetchStarterMessage().catch(() => null);
       await Promise.all([
         starter && !starter.author.bot ? this.translateUser(starter,thread.id) : Promise.resolve(),
-        this.handleFeedback(thread.id, thread.name, '').catch(error => console.error('threadCreate', error))
+        this.handleFeedback(thread.id, thread.name, '', starter && !starter.author.bot ? starter.author.id : thread.ownerId).catch(error => console.error('threadCreate', error))
       ]);
     });
     this.client.on('messageCreate', async message => {
@@ -45,13 +58,13 @@ export class DiscordTransport {
       const ticket = this.store.list().find(row => row.decision_thread_id === message.channelId);
       if (ticket) {
         await this.translateUser(message,message.channelId);
-        await this.onDecision?.(ticket.id, message.content, message.author.id).catch(error => console.error('decision', error));
+        await this.onDecision?.(ticket.id, message.content, message.author.id, message.channelId).catch(error => console.error('decision', error));
         return;
       }
       if (message.channel.parentId !== this.config.discordChannelId) return;
       await Promise.all([
         this.translateUser(message,message.channelId),
-        this.handleFeedback(message.channelId, message.channel.name, message.id).catch(error => console.error('messageCreate', error))
+        this.handleFeedback(message.channelId, message.channel.name, message.id, message.author.id).catch(error => console.error('messageCreate', error))
       ]);
     });
     await this.client.login(this.config.discordToken);
@@ -70,15 +83,16 @@ export class DiscordTransport {
       this.seedMessages.set(thread.id, `${message.author.username}: ${message.content || '[添付のみ]'}`);
       await Promise.all([
         this.translateUser(message,thread.id),
-        this.handleFeedback(thread.id, thread.name, message.id)
+        this.handleFeedback(thread.id, thread.name, message.id, message.author.id)
       ]);
     } finally { this.pendingStarts.delete(message.id); }
   }
-  async handleFeedback(threadId, title, messageId) {
+  async handleFeedback(threadId, title, messageId, authorId = '') {
     const existing = this.store.get(threadId);
     if (existing && existing.last_message_id === messageId && messageId) return;
     this.store.create(threadId, title, messageId);
     if (messageId) this.store.update(threadId, { last_message_id: messageId });
+    if (/^\d{17,20}$/.test(authorId || '')) this.store.setKv(`last-author:${threadId}`,authorId);
     await this.onFeedback?.(threadId);
   }
   async history(threadId) {
@@ -87,8 +101,8 @@ export class DiscordTransport {
     const messages = await thread.messages.fetch({ limit: 100 });
     const starter = await thread.fetchStarterMessage().catch(() => null);
     if (starter) messages.set(starter.id,starter);
-    const history = [...messages.values()].filter(message => !message.author.bot || (message.author.id === this.client.user?.id && message.content.startsWith('🛠️ 修正依頼の引き継ぎ'))).sort((a,b) => a.createdTimestamp - b.createdTimestamp)
-      .map(message => `${message.author.username}: ${message.content || '[添付のみ]'}${message.attachments.size ? ` [添付: ${[...message.attachments.values()].map(x => x.url).join(', ')}]` : ''}`).join('\n').slice(-20_000);
+    const history = [...messages.values()].sort((a,b) => a.createdTimestamp - b.createdTimestamp)
+      .map(message => historyLine(message,this.client.user?.id)).filter(Boolean).join('\n').slice(-20_000);
     if (starter) this.seedMessages.delete(threadId);
     return history || this.seedMessages.get(threadId) || '';
   }
@@ -126,15 +140,6 @@ export class DiscordTransport {
     const message = await thread.messages.fetch(messageId).catch(() => null) || await thread.fetchStarterMessage().catch(() => null);
     if (!message || message.id !== messageId || message.author.bot) return '';
     return `${message.author.username}: ${message.content || '[添付のみ]'}${message.attachments.size ? ` [添付: ${[...message.attachments.values()].map(attachment => attachment.url).join(', ')}]` : ''}`;
-  }
-  async createFollowUp(ticket, report, title) {
-    const channel = await this.client.channels.fetch(this.config.discordChannelId);
-    if (!channel?.threads) throw new Error('Feedback text channel is unavailable');
-    const thread = await channel.threads.create({name:`修正｜${title || ticket.title}`.slice(0,100),type:ChannelType.PublicThread,reason:`Follow-up to feedback ${ticket.id}`});
-    this.ownThreads.add(thread.id);
-    const originalUrl = `https://discord.com/channels/${thread.guildId}/${ticket.id}`;
-    await thread.send({content:`🛠️ 修正依頼の引き継ぎ\n元のフィードバック: ${originalUrl}\n元のPR: ${ticket.pr_number ? `#${ticket.pr_number}` : 'なし'}\n報告: ${report}`.slice(0,1900),allowedMentions:{parse:[]}});
-    return {id:thread.id,url:`https://discord.com/channels/${thread.guildId}/${thread.id}`};
   }
   async sendRaw(threadId, text, mentionUserId = '') {
     if (!this.config.discordToken) return;
@@ -175,9 +180,9 @@ export class DiscordTransport {
     const thread = await this.client.channels.fetch(threadId);
     return `https://discord.com/channels/${thread.guildId}/${threadId}`;
   }
-  async decision(ticket, question) {
+  async decision(ticket, question, { mentionUserId = '' } = {}) {
     if (!this.config.decisionForumId) {
-      await this.say(ticket.id, `👥 判断が必要です。${question}`);
+      await this.say(ticket.id, `👥 判断が必要です。${question}\nこのスレッドで回答してください。`,{mentionUserId});
       return '';
     }
     const forum = await this.client.channels.fetch(this.config.decisionForumId);

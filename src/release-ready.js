@@ -1,6 +1,5 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { open, readFile, rm, stat } from 'node:fs/promises';
 import { REST, Routes } from 'discord.js';
 import { getConfig } from './config.js';
 import { Store } from './store.js';
@@ -9,31 +8,12 @@ import { GitHub } from './git.js';
 import { Translator } from './translation.js';
 import { Engine } from './engine.js';
 import { syncThreadStatus } from './thread-status.js';
+import { acquireLock } from './lock.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const config = getConfig();
 const store = new Store(join(root,'.data','state.sqlite'));
-const lockPath = join(root,'.data','release.lock');
-async function acquireLock() {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const handle = await open(lockPath,'wx');
-      await handle.writeFile(String(process.pid));
-      return handle;
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      const age = Date.now() - (await stat(lockPath)).mtimeMs;
-      if (age < 10_000) return null;
-      let alive = false;
-      try { process.kill(Number(await readFile(lockPath,'utf8')),0); alive = true; }
-      catch (checkError) { alive = checkError.code === 'EPERM'; }
-      if (alive) return null;
-      await rm(lockPath,{force:true});
-    }
-  }
-  return null;
-}
-const lock = await acquireLock();
+const lock = await acquireLock(join(root,'.data','release.lock'));
 if (!lock) {
   console.log('Another release is already running.');
   store.close();
@@ -69,7 +49,7 @@ const discord = {
 };
 
 try {
-  const ready = store.list().filter(row => row.status === 'pr_ready' && row.pr_number);
+  const ready = store.byStatus(['pr_ready']).filter(row => row.pr_number);
   if (!ready.length) console.log('No PR is ready for release.');
   else {
     const engine = new Engine(config,store,ai,git,discord);
@@ -78,4 +58,4 @@ try {
     console.log(`Release ${latest?.id || ''}: ${latest?.status || (success ? 'merged' : 'failed')}`);
     if (!success) process.exitCode = 1;
   }
-} finally { store.close(); await lock.close(); await rm(lockPath,{force:true}); }
+} finally { store.close(); await lock.release(); }

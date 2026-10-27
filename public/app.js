@@ -1,20 +1,20 @@
 const $ = id => document.getElementById(id);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const fmt = time => new Date(time).toLocaleString('ja-JP', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
-const statusIcons = {intake:'📝',waiting_info:'❓',decision:'❓',planning:'📝',queued:'⏳',coding:'🛠️',pr_ready:'🧪',integrating:'🔀',merged:'✅',resolved_existing:'✅',failed:'⚠️'};
-const statusLabels = {intake:'聞き取り中',waiting_info:'回答待ち',decision:'判断待ち',planning:'計画中',queued:'実装待ち',coding:'実装中',pr_ready:'PR確認待ち',integrating:'マージ作業中',merged:'マージ済み',resolved_existing:'既存機能を案内',failed:'要対応'};
+const statusIcons = {intake:'📝',waiting_info:'❓',decision:'❓',proposal:'💡',declined:'🚫',planning:'📝',queued:'⏳',coding:'🛠️',pr_ready:'🧪',integrating:'🔀',merged:'✅',resolved_existing:'✅',failed:'⚠️'};
+const statusLabels = {intake:'聞き取り中',waiting_info:'回答待ち',decision:'判断待ち',proposal:'提案中',declined:'見送り',planning:'計画中',queued:'実装待ち',coding:'実装中',pr_ready:'PR確認待ち',integrating:'マージ作業中',merged:'マージ済み',resolved_existing:'既存機能を案内',failed:'要対応'};
 const lanes = [
-  { name:'聞き取り', statuses:['intake','waiting_info','decision'] },
+  { name:'聞き取り', statuses:['intake','waiting_info','decision','proposal'] },
   { name:'計画', statuses:['planning','queued'] },
   { name:'実装', statuses:['coding'] },
   { name:'統合・出荷', statuses:['pr_ready','integrating'] },
-  { name:'対応済み', statuses:['merged','resolved_existing'] },
+  { name:'対応済み', statuses:['merged','resolved_existing','declined'] },
   { name:'要対応', statuses:['failed'] }
 ];
 function render(state) {
   $('connection').className = `connection ${state.mode === 'live' ? '' : 'setup'}`;
   $('connection').innerHTML = `<i></i>${state.mode === 'live' ? 'LIVE SYSTEM' : 'SETUP MODE'}`;
-  $('stat-open').textContent = String(state.tickets.filter(x => !['merged','resolved_existing','grouped'].includes(x.status)).length).padStart(2,'0');
+  $('stat-open').textContent = String(state.tickets.filter(x => !['merged','resolved_existing','grouped','declined'].includes(x.status)).length).padStart(2,'0');
   $('stat-progress').textContent = String(state.tickets.filter(x => ['planning','queued','coding','integrating'].includes(x.status)).length).padStart(2,'0');
   $('stat-ready').textContent = String(state.tickets.filter(x => x.status === 'pr_ready').length).padStart(2,'0');
   const latest = state.releases.find(x => x.status === 'merged');

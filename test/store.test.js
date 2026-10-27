@@ -44,3 +44,21 @@ test('existing merged tickets retain their main branch label after migration', (
     migrated.close();
   } finally { rmSync(dir,{recursive:true,force:true}); }
 });
+
+test('rounds keep earlier PRs of the same thread and statuses are found without the list limit', () => {
+  const dir = mkdtempSync(join(tmpdir(),'tonarium-store-rounds-'));
+  try {
+    const store = new Store(join(dir,'state.sqlite'));
+    for (let index = 0; index < 205; index++) store.create(`ticket-${index}`,'案件');
+    store.update('ticket-0',{status:'merged',pr_number:10});
+    for (let index = 1; index < 205; index++) store.update(`ticket-${index}`,{status:'intake'});
+    assert.equal(store.list().some(row => row.id === 'ticket-0'),false);
+    assert.deepEqual(store.byStatus(['merged']).map(row => row.id),['ticket-0']);
+    store.archiveRound(store.get('ticket-0'));
+    store.update('ticket-0',{round:2,status:'pr_ready',pr_number:11});
+    assert.deepEqual(store.rounds('ticket-0').map(round => [round.round,round.pr_number]),[[1,10]]);
+    assert.deepEqual(store.byPr([10]).map(row => row.id),['ticket-0']);
+    assert.deepEqual(store.byPr([11]).map(row => row.id),['ticket-0']);
+    store.close();
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+});

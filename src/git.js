@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { command } from './command.js';
 
+const changelogPaths = ['changelog','shared/changelog.ts'];
+
 export class GitHub {
   constructor(config, root) { this.config = config; this.root = root; this.worktrees = join(root, '.worktrees'); }
   git(args, cwd = this.config.repo, options = {}) { return command('git', args, { cwd, ...options }); }
@@ -46,9 +48,34 @@ export class GitHub {
     await this.git(['worktree','remove','--force',path]).catch(() => {});
     await rm(path, { recursive: true, force: true }).catch(() => {});
   }
+  async changelogChanges(path, base) {
+    const tracked = (await this.git(['diff','--name-only',base,'--',...changelogPaths],path)).stdout.split('\n');
+    const untracked = (await this.git(['ls-files','--others','--exclude-standard','--',...changelogPaths],path)).stdout.split('\n');
+    return [...new Set([...tracked,...untracked].map(line => line.trim()).filter(Boolean))];
+  }
+  async restoreChangelog(path, base) {
+    const changed = await this.changelogChanges(path,base);
+    if (!changed.length) return [];
+    const inBase = new Set((await this.git(['ls-tree','-r','--name-only',base,'--',...changelogPaths],path)).stdout.split('\n').filter(Boolean));
+    const restore = changed.filter(file => inBase.has(file));
+    const remove = changed.filter(file => !inBase.has(file));
+    if (restore.length) await this.git(['checkout',base,'--',...restore],path);
+    if (remove.length) await this.git(['rm','-r','-f','-q','--ignore-unmatch','--',...remove],path);
+    for (const file of remove) await rm(join(path,file),{force:true});
+    return changed;
+  }
+  async reviewDiff(path, limit = 40_000) {
+    const base = (await this.git(['merge-base','HEAD',`origin/${this.config.baseBranch || 'develop'}`],path)).stdout;
+    // 新規ファイルも差分に出すため、内容は追加せずに追跡対象としてだけ登録する
+    await this.git(['add','-A','--intent-to-add'],path);
+    const stat = (await this.git(['diff','--stat=120',base],path)).stdout;
+    const diff = (await this.git(['diff','--unified=3',base,'--','.',':(exclude)package-lock.json'],path)).stdout;
+    return `${stat.slice(-4000)}\n\n${diff.slice(0,limit)}${diff.length > limit ? '\n…（以降省略）' : ''}`;
+  }
   async test(path) {
     const base = (await this.git(['merge-base','HEAD',`origin/${this.config.baseBranch || 'develop'}`],path)).stdout;
-    if (await this.changelogCheck(path,base) === 'missing') throw new Error('Every PR must add a new dated entry to shared/changelog.ts');
+    const changelog = await this.changelogChanges(path,base);
+    if (changelog.length) throw new Error(`Changelog files must not change before the main release: ${changelog.join(', ')}`);
     await command('npm', ['ci'], { cwd: path, timeoutMs: 15 * 60_000 });
     await command('npm', ['run','typecheck'], { cwd: path, timeoutMs: 15 * 60_000 });
     await command('npm', ['run','build'], { cwd: path, timeoutMs: 20 * 60_000 });
@@ -103,17 +130,6 @@ export class GitHub {
     await this.git(['push','origin',`HEAD:refs/heads/${branch}`],path);
     return (await this.git(['rev-parse','HEAD'],path)).stdout;
   }
-  async changelogCheck(path,baseSha) {
-    const script = join(path,'.github','scripts','check-changelog.mjs');
-    if (!existsSync(script)) return 'unavailable';
-    try {
-      await command(process.execPath,[script,baseSha],{cwd:path,timeoutMs:30_000});
-      return 'ok';
-    } catch (error) {
-      if (error.message.includes('Every PR must add a new dated entry')) return 'missing';
-      throw error;
-    }
-  }
   async prInfo(number) {
     const result = await this.gh(['pr','view',String(number),'--repo',this.config.githubRepo,'--json','state,headRefOid,headRefName,baseRefName,statusCheckRollup,mergeCommit']);
     return JSON.parse(result.stdout);
@@ -144,9 +160,47 @@ export class GitHub {
     await this.gh(['workflow','run','web-checks.yml','--repo',this.config.githubRepo,'--ref',branch]);
   }
   async prDetails(number) {
-    const result = await this.gh(['pr','view',String(number),'--repo',this.config.githubRepo,'--json','title,body,files,mergeCommit']);
+    const result = await this.gh(['pr','view',String(number),'--repo',this.config.githubRepo,'--json','title,body,files,mergeCommit,author']);
     const info = JSON.parse(result.stdout);
-    return {title:info.title,body:info.body,mergeCommit:info.mergeCommit?.oid,files:(info.files || []).map(file => file.path)};
+    return {title:info.title,body:info.body,author:info.author?.login || '',mergeCommit:info.mergeCommit?.oid,files:(info.files || []).map(file => file.path)};
+  }
+  async fetchBranches(...branches) {
+    await mkdir(this.worktrees, { recursive: true });
+    await this.git(['fetch','origin',...branches]);
+  }
+  async revParse(ref) { return (await this.git(['rev-parse',ref])).stdout; }
+  async firstParentCommits(from, to) {
+    const raw = (await this.git(['log','--first-parent','--reverse','--format=%H%x1f%P%x1f%an%x1f%s%x1f%b%x1e',`${from}..${to}`])).stdout;
+    return raw.split('\x1e').map(record => record.replace(/^\n/,'')).filter(record => record.trim()).map(record => {
+      const [sha,parents,author,subject,body] = record.split('\x1f');
+      return {sha,parents:parents.split(' ').filter(Boolean),author,subject,body:(body || '').trim()};
+    });
+  }
+  async commitDiff(sha, parent, limit = 8000) {
+    const range = [parent || `${sha}^`,sha];
+    const stat = (await this.git(['diff','--stat=120',...range])).stdout;
+    const added = (await this.git(['diff','--name-only','--diff-filter=A',...range,'--','changelog'])).stdout.split('\n').filter(Boolean);
+    const diff = (await this.git(['diff','--unified=2',...range,'--','.',':(exclude)package-lock.json',':(exclude)changelog',':(exclude)shared/changelog.ts'])).stdout;
+    return {stat:stat.slice(-3000),diff:diff.slice(0,limit),addedChangelog:added};
+  }
+  async releaseWorktree(name, base) {
+    await mkdir(this.worktrees, { recursive: true });
+    const safe = name.replace(/[^a-zA-Z0-9_-]/g, '-');
+    const path = join(this.worktrees, safe);
+    const branch = `release/${safe}`;
+    await this.git(['worktree','add','-b',branch,path,base]);
+    return { path, branch };
+  }
+  async openPrs(base) {
+    const result = await this.gh(['pr','list','--repo',this.config.githubRepo,'--base',base,'--state','open','--json','number,headRefName,headRefOid,body','--limit','50']);
+    return JSON.parse(result.stdout || '[]');
+  }
+  async createPr(title, body, branch, base) {
+    const result = await this.gh(['pr','create','--repo',this.config.githubRepo,'--base',base,'--head',branch,'--title',title,'--body',body]);
+    return Number(result.stdout.match(/\/(\d+)\s*$/)?.[1]) || null;
+  }
+  async closePr(number, note) {
+    await this.gh(['pr','close',String(number),'--repo',this.config.githubRepo,'--delete-branch','--comment',note]);
   }
   async waitForChecks(number, expectedHead) {
     const deadline = Date.now() + (this.config.checksTimeoutMs || 20 * 60_000);
@@ -183,10 +237,10 @@ export class GitHub {
     }
     throw new Error(`PR #${number} checks timed out`);
   }
-  async mergePr(number, expectedHead) {
+  async mergePr(number, expectedHead, base = this.config.baseBranch || 'develop') {
     const before = await this.prInfo(number);
     if (before.state === 'MERGED') return before.mergeCommit?.oid || null;
-    if (before.baseRefName !== (this.config.baseBranch || 'develop')) throw new Error(`PR #${number} targets ${before.baseRefName}`);
+    if (before.baseRefName !== base) throw new Error(`PR #${number} targets ${before.baseRefName}`);
     if (before.headRefOid !== expectedHead) throw new Error(`PR #${number} head changed before merge`);
     await this.gh(['pr','merge',String(number),'--repo',this.config.githubRepo,'--merge','--match-head-commit',expectedHead]);
     const after = await this.prInfo(number);
