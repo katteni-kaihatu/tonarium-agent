@@ -12,7 +12,9 @@
     "test": "node --test",
     "doctor": "node src/doctor.js",
     "release:ready": "node src/release-ready.js",
-    "answer:thread": "node src/answer-thread.js"
+    "answer:thread": "node src/answer-thread.js",
+    "release:main": "node src/release-main.js",
+    "eval:verdicts": "node src/eval-verdicts.js"
   },
   "dependencies": {
     "@openai/codex": "^0.164.0",

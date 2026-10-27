@@ -91,3 +91,34 @@ test('release waits for a workflow run before its jobs appear in the PR rollup',
   assert.equal(await git.waitForChecks(12,'tested-sha'),2);
   assert.equal(polls,2);
 });
+
+test('changelog edits are detected and restored to the base without touching other files', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { execFileSync } = await import('node:child_process');
+  const dir = mkdtempSync(join(tmpdir(),'tonarium-git-changelog-'));
+  try {
+    const run = (...args) => execFileSync('git',args,{cwd:dir,encoding:'utf8'}).trim();
+    run('init','-b','develop');
+    run('config','user.name','Test'); run('config','user.email','test@example.invalid');
+    mkdirSync(join(dir,'changelog')); mkdirSync(join(dir,'shared'));
+    writeFileSync(join(dir,'changelog','2026-10-26-old.json'),'{"old":true}');
+    writeFileSync(join(dir,'shared','changelog.ts'),'export const CHANGELOG = [];');
+    writeFileSync(join(dir,'app.js'),'one');
+    run('add','.'); run('commit','-q','-m','base');
+    const base = run('rev-parse','HEAD');
+    const git = new GitHub({repo:dir,baseBranch:'develop'},dir);
+    assert.deepEqual(await git.changelogChanges(dir,base),[]);
+    writeFileSync(join(dir,'changelog','2026-10-27-new.json'),'{"new":true}');
+    writeFileSync(join(dir,'changelog','2026-10-26-old.json'),'{"edited":true}');
+    writeFileSync(join(dir,'shared','changelog.ts'),'export const CHANGELOG = [1];');
+    writeFileSync(join(dir,'app.js'),'two');
+    assert.deepEqual((await git.changelogChanges(dir,base)).sort(),['changelog/2026-10-26-old.json','changelog/2026-10-27-new.json','shared/changelog.ts']);
+    await git.restoreChangelog(dir,base);
+    assert.deepEqual(await git.changelogChanges(dir,base),[]);
+    assert.equal(existsSync(join(dir,'changelog','2026-10-27-new.json')),false);
+    assert.equal(readFileSync(join(dir,'changelog','2026-10-26-old.json'),'utf8'),'{"old":true}');
+    assert.equal(readFileSync(join(dir,'app.js'),'utf8'),'two');
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+});

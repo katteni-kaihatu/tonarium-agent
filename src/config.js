@@ -11,7 +11,8 @@ const defaultRoles = [
   ...['そら','ゆず','もも','はる','かなた','ふう','きい','あかり','ひなた','しおり','れん','さつき','いおり','みなと','こよみ'].map((name,index) => ({id:`builder${index+1}`,name,job:'実装',color:'blue'})),
   { id: 'support', name: 'あん', job: '実装案内', color: 'mint' },
   { id: 'integrator', name: 'すず', job: '統合', color: 'violet' },
-  { id: 'release', name: 'みのり', job: '出荷', color: 'gold' }
+  { id: 'release', name: 'みのり', job: '出荷', color: 'gold' },
+  { id: 'mainrelease', name: 'つむぎ', job: 'リリース', color: 'gold' }
 ];
 let customNames = {};
 try { customNames = JSON.parse(process.env.TONARIUM_TEAM_NAMES || '{}'); } catch { /* keep defaults */ }
@@ -23,9 +24,12 @@ export function getConfig(env = process.env) {
     discordChannelId: env.DISCORD_CHANNEL_ID || '',
     decisionForumId: env.DISCORD_DECISION_FORUM_ID || '',
     decisionMentionId: env.DISCORD_DECISION_MENTION_ID || '',
+    releaseChannelId: env.DISCORD_RELEASE_CHANNEL_ID || '',
     repo: resolve(env.TONARIUM_REPO || 'C:/Users/neo/GitHub/tonarium-prototype'),
     githubRepo: env.GITHUB_REPO || 'katteni-kaihatu/tonarium-prototype',
     baseBranch: env.RELEASE_BRANCH || 'develop',
+    mainBranch: env.MAIN_BRANCH || 'main',
+    mainReleaseIntervalMs: nonNegativeNumber(env.MAIN_RELEASE_INTERVAL_MINUTES, 15) * 60_000,
     intakeProvider: env.INTAKE_PROVIDER || 'codex',
     planningProvider: env.PLANNING_PROVIDER || 'codex',
     codingProvider: env.CODING_PROVIDER || 'codex',

@@ -1,16 +1,17 @@
 const states = {
-  intake:['📝','聞き取り中'], waiting_info:['❓','回答待ち'], decision:['❓','判断待ち'],
+  intake:['📝','聞き取り中'], waiting_info:['❓','回答待ち'], decision:['❓','判断待ち'], proposal:['💡','提案中'],
   planning:['📝','計画中'], queued:['⏳','実装待ち'], coding:['🛠️','実装中'],
   pr_ready:['🧪','PR確認待ち'], integrating:['🔀','マージ作業中'],
   merged:['✅','マージ済み'], resolved_existing:['✅','既存機能を案内'],
-  grouped:['🔗','他案件に統合'], failed:['⚠️','要対応']
+  grouped:['🔗','他案件に統合'], failed:['⚠️','要対応'], declined:['🚫','見送り']
 };
 const prefixes = [...new Set(Object.values(states).map(([emoji]) => emoji)), '🔄','🙋'];
-const labels = new Set(Object.values(states).map(([,label]) => label).concat(['mainへマージ済み','developへマージ済み','再試行待ち','出荷を再試行','指示待ち','要件整理済み','完了']));
+const labels = new Set(Object.values(states).map(([,label]) => label).concat(['mainへマージ済み','developへマージ済み','mainに反映済み','再試行待ち','出荷を再試行','指示待ち','要件整理済み','完了']));
 
 export function threadStatusFor(ticket, store) {
   if (!ticket) return null;
   if (ticket.status === 'waiting_info' && store.getKv(`awaiting-instruction:${ticket.id}`) === '1') return {emoji:'🙋',label:'指示待ち'};
+  if (ticket.status === 'merged' && store.getKv(`main-released:${ticket.id}`) === '1') return {emoji:'✅',label:'mainに反映済み'};
   if (ticket.status === 'merged') return {emoji:'✅',label:`${ticket.merged_branch || 'main'}へマージ済み`};
   return states[ticket.status] ? {emoji:states[ticket.status][0],label:states[ticket.status][1]} : null;
 }

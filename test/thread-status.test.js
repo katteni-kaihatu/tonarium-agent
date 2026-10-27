@@ -46,3 +46,19 @@ test('thread status uses the saved ticket state after a Discord rate limit', asy
     assert.deepEqual(names,['🧪 PR確認待ち｜二段ジャンプ']);
   } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
 });
+
+test('proposal, declined and main release states have their own thread labels', () => {
+  const dir = mkdtempSync(join(tmpdir(),'tonarium-thread-status-labels-'));
+  const store = new Store(join(dir,'state.sqlite'));
+  try {
+    store.create('thread-1','カメラ');
+    store.update('thread-1',{status:'proposal'});
+    assert.deepEqual(threadStatusFor(store.get('thread-1'),store),{emoji:'💡',label:'提案中'});
+    store.update('thread-1',{status:'declined'});
+    assert.deepEqual(threadStatusFor(store.get('thread-1'),store),{emoji:'🚫',label:'見送り'});
+    store.update('thread-1',{status:'merged',merged_branch:'develop'});
+    assert.equal(threadStatusFor(store.get('thread-1'),store).label,'developへマージ済み');
+    store.setKv('main-released:thread-1','1');
+    assert.equal(threadStatusName('✅ developへマージ済み｜カメラ',threadStatusFor(store.get('thread-1'),store)),'✅ mainに反映済み｜カメラ');
+  } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
+});

@@ -12,11 +12,13 @@ const checks = [
   ['Tonarium checkout', existsSync(config.repo), config.repo],
   ['Discord Bot token', Boolean(config.discordToken), 'DISCORD_TOKEN'],
   ['Discord feedback channel', Boolean(config.discordChannelId), config.discordChannelId],
-  ['GitHub release branch', Boolean(config.baseBranch), config.baseBranch]
+  ['GitHub release branch', Boolean(config.baseBranch), config.baseBranch],
+  ['Main release', true, config.mainReleaseIntervalMs ? `${config.baseBranch} → ${config.mainBranch} every ${config.mainReleaseIntervalMs / 60_000} minutes` : 'disabled']
 ];
 try {
   for (const role of [...roles,{name:'通訳'}]) await ai.guidance(role.name);
-  checks.push(['Role Markdown guidance',true,'WORKFLOW.md and prompts/']);
+  await ai.guidance('設計レビュー',{guide:'review'});
+  checks.push(['Role Markdown guidance',true,'WORKFLOW.md, policy/guardrails.md and prompts/']);
 } catch (error) { checks.push(['Role Markdown guidance',false,error.message]); }
 if (config.translationProvider === 'openai') checks.push(['OpenAI translation key',Boolean(config.translationApiKey),'OPENAI_API_KEY']);
 const providers = [config.intakeProvider,config.planningProvider,config.codingProvider,config.integrationProvider,config.translationProvider];
@@ -53,6 +55,13 @@ if (config.discordToken) {
       ['Create Public Threads',PermissionFlagsBits.CreatePublicThreads],
       ['Send Messages in Threads',PermissionFlagsBits.SendMessagesInThreads]
     ]) checks.push([`Discord ${name}`,permissions.has(flag),channel.name]);
+    if (config.releaseChannelId) {
+      const releaseChannel = await bot.channels.fetch(config.releaseChannelId).catch(() => null);
+      const releasePermissions = releaseChannel?.permissionsFor?.(member);
+      for (const [name,flag] of [['View Channel',PermissionFlagsBits.ViewChannel],['Send Messages',PermissionFlagsBits.SendMessages]]) {
+        checks.push([`Release channel ${name}`,Boolean(releasePermissions?.has(flag)),releaseChannel?.name || config.releaseChannelId]);
+      }
+    } else checks.push(['Release channel',true,'DISCORD_RELEASE_CHANNEL_ID is empty; main release results are not posted']);
   } catch { checks.push(['Discord Bot connection',false,'Check token, Message Content Intent and channel ID']); }
   finally { bot.destroy(); }
 }

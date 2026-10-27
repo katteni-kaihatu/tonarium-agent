@@ -138,28 +138,22 @@ test('release tests a PR against current main, waits for checks, then merges it'
   } finally { f.close(); }
 });
 
-test('release asks the integrator to repair a missing changelog entry before merging', async () => {
+test('release removes changelog edits left by an older PR before testing and merging', async () => {
   const f = fixture();
   try {
     f.store.create('ticket-1','メニューを変更');
-    f.store.update('ticket-1',{status:'pr_ready',branch:'agent/task-1',pr_number:12,summary:'変更履歴の位置を移動'});
-    f.engine.config = {baseBranch:'main',githubRepo:'owner/repo',batchMs:0,integrationProvider:'codex'};
+    f.store.update('ticket-1',{status:'pr_ready',branch:'agent/task-1',pr_number:12});
+    f.engine.config = {baseBranch:'develop',githubRepo:'owner/repo',batchMs:0};
+    f.engine.ai = {ask:async () => ({notes:''})};
     const calls = [];
-    f.engine.ai = {
-      ask:async () => ({selectedIds:['ticket-1'],notes:''}),
-      code:async (_name,_prompt,_path,options) => { assert.equal(options.provider,'codex'); calls.push('repair'); return 'Added changelog entry'; }
-    };
-    let checked = 0, merged = false;
+    let merged = false;
     f.engine.git = {
       prInfo:async () => ({state:'OPEN'}),
       baseHead:async () => merged ? 'merge456' : 'base123',
-      git:async args => {
-        if (args[0] === 'status') return {stdout:' M shared/changelog.ts'};
-        calls.push(args[0]); return {stdout:''};
-      },
+      git:async args => { calls.push(args.join(' ')); return {stdout:''}; },
       worktree:async () => ({path:'candidate'}),
       mergeMainInto:async () => {},
-      changelogCheck:async () => ++checked === 1 ? 'missing' : 'ok',
+      restoreChangelog:async (path,base) => { calls.push(`restore ${path} ${base}`); return ['shared/changelog.ts']; },
       test:async () => calls.push('test'),
       pushBranch:async () => 'head123',
       waitForChecks:async () => 1,
@@ -167,8 +161,9 @@ test('release asks the integrator to repair a missing changelog entry before mer
       removeWorktree:async () => {}
     };
     assert.equal(await f.engine.release(true),true);
-    assert.deepEqual(calls.filter(x => ['repair','add','commit','test'].includes(x)),['repair','add','commit','test']);
-    assert.equal(f.store.get('ticket-1').status,'merged');
+    const relevant = calls.filter(call => /^(restore|add|commit|test)/.test(call));
+    assert.deepEqual(relevant,['restore candidate base123','add -A','commit -m chore: leave changelog to the main release','test']);
+    assert.ok(f.store.events().some(event => event.kind === 'changelog_restored'));
   } finally { f.close(); }
 });
 
@@ -335,26 +330,199 @@ test('completed threads answer implementation questions without reopening the ta
   } finally { f.close(); }
 });
 
-test('a bug report in a completed thread creates a linked repair ticket', async () => {
+test('a bug report in a completed thread starts the next round in the same thread', async () => {
   const f = fixture();
   try {
     f.store.create('thread-1','サムネイル');
-    f.store.update('thread-1',{status:'merged',pr_number:94,last_message_id:'bug-message',answered_message_id:'old-message'});
+    f.store.update('thread-1',{status:'merged',pr_number:94,issue_number:90,branch:'agent/task-thread-1',summary:'サムネイルを定期更新',criteria:JSON.stringify(['30秒ごとに更新']),last_message_id:'bug-message',answered_message_id:'old-message'});
+    f.store.setKv('failure-count:thread-1',2);
     f.engine.discord.userMessage = async () => '利用者: サムネイルが更新されなくなった';
-    f.engine.discord.createFollowUp = async () => ({id:'repair-thread',url:'https://discord.com/channels/guild/repair-thread'});
-    f.engine.git.prDetails = async () => ({title:'サムネイル',files:['client/src/preview.ts']});
+    f.engine.git.prDetails = async () => ({title:'サムネイル',body:'## 利用者向けの変更\n- 定期更新',files:['client/src/preview.ts']});
     f.engine.ai = {ask:async () => ({action:'new_fix',title:'サムネイルの更新停止',summary:'更新が止まる不具合'})};
     const started = [];
     f.engine.feedback = async id => { started.push(id); };
     await f.engine.receive('thread-1');
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(f.store.get('thread-1').status,'merged');
-    assert.equal(f.store.get('thread-1').answered_message_id,'bug-message');
-    assert.equal(f.store.get('repair-thread').status,'intake');
-    assert.equal(f.store.get('repair-thread').parent_ticket_id,'thread-1');
-    assert.equal(f.store.get('repair-thread').base_sha,'base-123');
-    assert.deepEqual(started,['repair-thread']);
-    assert.match(f.sent[0].text,/repair-thread/);
+    const ticket = f.store.get('thread-1');
+    assert.equal(ticket.status,'intake');
+    assert.equal(ticket.round,2);
+    assert.equal(ticket.pr_number,null);
+    assert.equal(ticket.title,'サムネイルの更新停止');
+    assert.equal(f.store.getKv('failure-count:thread-1'),'');
+    assert.deepEqual(f.store.rounds('thread-1').map(round => [round.round,round.pr_number,round.status]),[[1,94,'merged']]);
+    assert.deepEqual(started,['thread-1']);
+    assert.match(f.sent[0].text,/PR #94.*このスレッドで続けて対応/);
+    assert.match(await f.engine.roundContext('thread-1'),/"pr":94.*定期更新/);
+  } finally { f.close(); }
+});
+
+test('messages during implementation or shipping always get a reply', async () => {
+  const f = fixture();
+  try {
+    f.engine.discord.userMessage = async (_id,messageId) => `利用者: ${messageId}`;
+    f.store.create('coding','カメラ');
+    f.store.update('coding',{status:'coding',last_message_id:'m1'});
+    await f.engine.receive('coding');
+    await f.engine.receive('coding');
+    assert.equal(f.sent.length,1);
+    assert.match(f.sent[0].text,/PR を作る前に反映/);
+    assert.deepEqual(f.engine.addenda('coding'),['利用者: m1']);
+    f.store.create('shipping','地図');
+    f.store.update('shipping',{status:'pr_ready',pr_number:7,last_message_id:'m2',answered_message_id:'m0'});
+    await f.engine.receive('shipping');
+    assert.match(f.sent[1].text,/PR #7.*マージが終わったら/);
+    f.store.update('shipping',{status:'integrating'});
+    await f.engine.markMerged(f.store.get('shipping'),'sha12345');
+    assert.equal(f.store.get('shipping').answered_message_id,'m0');
+    let followed = '';
+    f.engine.followUp = async id => { followed = id; };
+    await f.engine.tick();
+    assert.equal(followed,'shipping');
+    assert.equal(f.store.getKv('pending-followup:shipping'),'');
+  } finally { f.close(); }
+});
+
+test('a message to a stopped ticket resumes it as an instruction', async () => {
+  const f = fixture();
+  try {
+    f.store.create('stopped','二段ジャンプ');
+    f.store.update('stopped',{status:'failed',last_message_id:'m1'});
+    f.store.setKv('failed-review-count:stopped',3);
+    let resumed = '';
+    f.engine.feedback = async id => { resumed = f.store.get(id).status; };
+    await f.engine.receive('stopped');
+    assert.equal(resumed,'waiting_info');
+    assert.equal(f.store.getKv('awaiting-instruction:stopped'),'1');
+  } finally { f.close(); }
+});
+
+test('a grouped thread passes new messages to the active parent or reopens when the parent moved on', async () => {
+  const f = fixture();
+  try {
+    f.engine.discord.userMessage = async () => '利用者: スマホでも使いたい';
+    f.store.create('parent','地図の拡大'); f.store.update('parent',{status:'queued'});
+    f.store.create('child','地図'); f.store.update('child',{status:'grouped',parent_ticket_id:'parent',last_message_id:'m1'});
+    await f.engine.receive('child');
+    assert.match(f.engine.addenda('parent')[0],/スマホでも使いたい/);
+    assert.match(f.sent[0].text,/地図の拡大.*まとめ先の作業に渡しました/);
+    f.store.update('parent',{status:'merged'});
+    f.store.update('child',{last_message_id:'m2'});
+    let reopened = '';
+    f.engine.feedback = async id => { reopened = f.store.get(id).status; };
+    await f.engine.receive('child');
+    assert.equal(reopened,'intake');
+  } finally { f.close(); }
+});
+
+test('intake questions mention the person who needs to answer, progress replies do not', async () => {
+  const f = fixture();
+  try {
+    f.store.create('feedback','地図');
+    f.store.setKv('last-author:feedback','12345678901234567');
+    f.engine.ai = {ask:async () => ({ready:false,reply:'どの画面で困っていますか？',title:'地図',summary:'',criteria:[]})};
+    await f.engine.feedback('feedback');
+    assert.equal(f.store.get('feedback').status,'waiting_info');
+    assert.equal(f.sent.at(-1).options.mentionUserId,'12345678901234567');
+    f.engine.ai = {ask:async () => ({ready:true,reply:'整理できました。',title:'地図',summary:'拡大',criteria:[]})};
+    f.engine.plan = async () => {};
+    await f.engine.feedback('feedback');
+    assert.equal(f.sent.at(-1).options,undefined);
+  } finally { f.close(); }
+});
+
+test('PM reads the repository snapshot and can propose before implementing', async () => {
+  const f = fixture();
+  try {
+    f.store.create('new','カメラのボタン');
+    f.engine.discord.threadOwnerId = async () => '12345678901234567';
+    let options;
+    f.engine.ai = {ask:async (_role,_prompt,given) => { options = given; return {verdict:'propose',proposal:'既存のカメラアイテムにタイマーを足す案を推奨します。',title:'カメラ',summary:'撮影',criteria:[]}; }};
+    await f.engine.plan('new','投稿内容');
+    assert.equal(options.cwd,f.dir);
+    assert.equal(options.repoReadOnly,true);
+    assert.equal(f.store.get('new').status,'proposal');
+    assert.match(f.store.getKv('proposal:new'),/タイマー/);
+    assert.equal(f.sent.at(-1).options.mentionUserId,'12345678901234567');
+  } finally { f.close(); }
+});
+
+test('a declined request can only be overturned by the decision maker', async () => {
+  const f = fixture();
+  try {
+    f.engine.config.decisionMentionId = '22222222222222222';
+    f.store.create('risky','管理者画面');
+    f.store.update('risky',{last_message_id:'m1'});
+    f.engine.discord.threadOwnerId = async () => '11111111111111111';
+    f.engine.ai = {ask:async () => ({verdict:'decline',reason:'認証の確認を外す変更のため見送ります。',title:'管理者画面',summary:'権限',criteria:[]})};
+    await f.engine.plan('risky','投稿内容');
+    assert.equal(f.store.get('risky').status,'declined');
+    assert.equal(f.sent.at(-1).options.mentionUserId,'11111111111111111');
+    f.store.update('risky',{last_message_id:'m2'});
+    f.engine.discord.userMessage = async () => '利用者: どうしても必要です';
+    let question;
+    f.engine.discord.decision = async (_ticket,text,options) => { question = {text,options}; return 'forum-1'; };
+    f.engine.ai = {ask:async () => ({action:'appeal'})};
+    await f.engine.receive('risky');
+    assert.equal(f.store.get('risky').status,'decision');
+    assert.equal(f.store.getKv('decision-kind:risky'),'appeal');
+    assert.equal(question.options.mentionUserId,'22222222222222222');
+    let planned = false;
+    f.engine.plan = async (_id,_history,answer,options) => { planned = {answer,options}; };
+    await f.engine.decision('risky','実装して','11111111111111111','forum-1');
+    assert.equal(planned,false);
+    assert.equal(f.store.get('risky').status,'decision');
+    assert.match(f.sent.at(-1).text,/決定者の回答を待っています/);
+    await f.engine.decision('risky','範囲を限定して実装してよい','22222222222222222','forum-1');
+    assert.equal(planned.answer,'範囲を限定して実装してよい');
+    assert.equal(planned.options.appeal,true);
+  } finally { f.close(); }
+});
+
+test('an ordinary product decision can be answered from the original thread', async () => {
+  const f = fixture();
+  try {
+    f.store.create('color','色');
+    f.store.update('color',{status:'decision',decision_thread_id:'forum-1',last_message_id:'m1'});
+    f.store.setKv('decision-kind:color','decision');
+    f.store.setKv('last-author:color','11111111111111111');
+    f.engine.discord.userMessage = async () => '利用者: 青にしてください';
+    let answer;
+    f.engine.plan = async (_id,_history,given) => { answer = given; };
+    await f.engine.receive('color');
+    assert.equal(answer,'利用者: 青にしてください');
+  } finally { f.close(); }
+});
+
+test('implementation reports user-facing changes in the PR body and restores changelog edits', async () => {
+  const f = fixture();
+  try {
+    f.store.create('task','タイマー');
+    f.store.update('task',{status:'queued',summary:'目的: 集合写真\nカメラにタイマー',criteria:JSON.stringify(['5秒後に撮影'])});
+    const calls = [];
+    let body = '';
+    f.engine.git = {
+      ...f.engine.git,
+      prepare:async () => {}, issue:async () => 5,
+      resumeTaskWorktree:async () => null,
+      worktree:async () => ({path:f.dir,branch:'agent/task-1'}),
+      reviewDiff:async () => 'diff --git a/client b/client',
+      restoreChangelog:async () => { calls.push('restore'); return ['changelog/2026-10-27-x.json']; },
+      test:async () => calls.push('test'),
+      commitPush:async () => calls.push('push'),
+      findPr:async () => null,
+      pr:async (_title,text) => { body = text; return 42; },
+      removeWorktree:async () => {}
+    };
+    f.engine.ai = {
+      code:async (_name,prompt) => { calls.push(prompt.startsWith('開発リード') ? 'revise' : 'code'); return 'できました\nUSER_FACING_CHANGES:\n- カメラに5秒タイマーを追加'; },
+      ask:async () => ({approve:false,issues:['撮影処理を既存のカメラに寄せる']})
+    };
+    await f.engine.implement('task',{id:'builder1',name:'そら'});
+    assert.deepEqual(calls,['code','revise','restore','test','push']);
+    assert.equal(f.store.get('task').status,'pr_ready');
+    assert.match(body,/^## 利用者向けの変更\n\n- カメラに5秒タイマーを追加/);
+    assert.match(body,/Closes #5/);
+    assert.match(body,/撮影処理を既存のカメラに寄せる/);
   } finally { f.close(); }
 });
 

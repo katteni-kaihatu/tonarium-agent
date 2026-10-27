@@ -66,25 +66,38 @@ test('Discord PNG attachments are downloaded for the intake vision input and cle
   } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
 });
 
-test('repair threads retain the original bug report for intake', async () => {
+test('history keeps the bot\'s own replies without translations so follow-ups keep their context', async () => {
   const dir = mkdtempSync(join(tmpdir(),'tonarium-discord-'));
   const store = new Store(join(dir,'state.sqlite'));
   try {
     const transport = new DiscordTransport({discordChannelId:'feedback'},store);
     transport.client.user = {id:'bot-1'};
-    const sent = [];
+    const message = (id,author,content,time) => [id,{author,content,attachments:new Map(),createdTimestamp:time}];
     const thread = {
-      id:'repair-1',guildId:'guild-1',isThread:() => true,
-      send:async payload => sent.push(payload.content),
-      messages:{fetch:async () => new Map([['seed',{author:{id:'bot-1',bot:true,username:'bot'},content:sent[0],attachments:new Map(),createdTimestamp:1}]])},
+      isThread:() => true,
+      messages:{fetch:async () => new Map([
+        message('a',{id:'user-1',bot:false,username:'kokoa'},'地図を拡大したい',1),
+        message('b',{id:'bot-1',bot:true,username:'tonarium'},'**ひより｜聞き取り**\nどの画面ですか？\n\n🌐 **翻訳 / Translations / 번역**\n🇺🇸 Which screen?',2),
+        message('c',{id:'bot-1',bot:true,username:'tonarium'},'🌐 **kokoa の発言 / message / 메시지**\n🇺🇸 I want to zoom',3),
+        message('d',{id:'other-bot',bot:true,username:'other'},'関係ない通知',4)
+      ])},
       fetchStarterMessage:async () => null
     };
-    transport.client.channels.fetch = async id => id === 'feedback'
-      ? {threads:{create:async () => thread}} : thread;
-    const result = await transport.createFollowUp({id:'original-1',title:'サムネイル',pr_number:94},'利用者: 更新されない','更新停止');
-    assert.equal(result.id,'repair-1');
-    assert.match(await transport.history('repair-1'),/更新されない/);
-    assert.match(sent[0],/#94/);
+    transport.client.channels.fetch = async () => thread;
+    const history = await transport.history('thread-1');
+    assert.equal(history,'kokoa: 地図を拡大したい\nBot(tonarium): **ひより｜聞き取り**\nどの画面ですか？');
+    transport.client.destroy();
+  } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('a thread message records its author for later mentions', async () => {
+  const dir = mkdtempSync(join(tmpdir(),'tonarium-discord-'));
+  const store = new Store(join(dir,'state.sqlite'));
+  try {
+    const transport = new DiscordTransport({discordChannelId:'feedback'},store);
+    transport.onFeedback = async () => {};
+    await transport.handleFeedback('thread-1','要望','12345678901234568','12345678901234567');
+    assert.equal(store.getKv('last-author:thread-1'),'12345678901234567');
     transport.client.destroy();
   } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
 });
