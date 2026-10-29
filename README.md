@@ -45,7 +45,9 @@ flowchart LR
 
 聞き取り担当は Codex のサブスクログインを使います。Discord のスレッドに添付された PNG・JPEG 画像を新しい順に最大4枚、各10 MiBまで一時取得し、`codex exec --image` の視覚入力として渡します。処理後に一時ファイルを消します。対応外の形式や取得できない画像は URL を会話履歴に残し、画像内容を確認したものとしては扱いません。画像入力の方法は [公式 OpenAI Docs](https://learn.chatgpt.com/docs/image-inputs?surface=cli) に従っています。
 
-ユーザーの発言と Bot の返答は、同じスレッドに **日本語・英語・韓国語**を併記します。元の発言は消しません。判断用フォーラムの会話も翻訳します。翻訳が失敗しても元の発言の聞き取りは続けます。マージ後や既存機能の案内後も同じスレッドで質問できます。実装案内の「あん」が PR と現在のコードを確認し、質問には回答します。不具合・回帰・追加の改修依頼なら、**同じスレッドで次のラウンド**として聞き取りから再開します。前回の要約・受け入れ条件・PR・会話（Bot の返答も含む）を引き継ぐので、前提を説明し直す必要はありません。前回のラウンドは `ticket_rounds` に残ります。再現情報が足りなければ同じスレッドで質問します。
+ユーザーの発言と Bot の返答は、同じスレッドで **日本語・英語・韓国語**にそろえます。翻訳は原文の言語を除いた行だけを国旗付きで出し、見出しは付けません（日本語の発言なら 🇺🇸 と 🇰🇷 の2行）。原文の言語が3言語のどれでもない場合は3行とも出します。元の発言は消しません。判断用フォーラムの会話も翻訳します。翻訳が失敗しても元の発言の聞き取りは続けます。
+
+投稿は Discord の Webhook 経由で、投稿者ごとの名前とアイコンにします。担当の返答は「さくら｜PM」のような名前と担当のアイコン（`public/avatars/<担当 ID>.png` を GitHub の公開 URL から読み込み）、参加者の発言の翻訳はその参加者のサーバーでの表示名とアイコンで出ます。どちらも Discord では「アプリ」の印が付きます。Bot は各チャンネルに「Tonarium Agent」（担当用）と「Tonarium Agent 通訳」（翻訳用）の2つの Webhook を自動で作ります。Webhook を使えない場合は、Bot 本人の名前で本文の先頭に担当名を付けて投稿します。マージ後や既存機能の案内後も同じスレッドで質問できます。実装案内の「あん」が PR と現在のコードを確認し、質問には回答します。不具合・回帰・追加の改修依頼なら、**同じスレッドで次のラウンド**として聞き取りから再開します。前回の要約・受け入れ条件・PR・会話（Bot の返答も含む）を引き継ぐので、前提を説明し直す必要はありません。前回のラウンドは `ticket_rounds` に残ります。再現情報が足りなければ同じスレッドで質問します。
 
 Discord のスレッド名には現在の案件状態を「🛠️ 実装中｜件名」「✅ developへマージ済み｜件名」「✅ mainに反映済み｜件名」のように絵文字と日本語で表示します。以前 `main` へ入れた案件はそのまま `main` と表示します。Discord の変更回数制限で更新できない場合は、保存された状態に合わせて再試行します。Web ボードにも状態の絵文字を表示し、失敗した案件は「要対応」欄に残します。
 
@@ -101,11 +103,11 @@ npm start
 
 一時的な GitHub push 失敗は同じコミットを再送します。それでも失敗した場合や実装テストで失敗した場合は、PM がエラーと作業ツリーを確認して再作業を指示します。出荷段階で同じPRが2回失敗した場合は、PMがCIログを調べて統合担当に修正を指示します。PMの修正指示を2回試しても解決しない場合や人の判断が必要な場合は自動再試行を止め、スレッドの投稿者にメンションして次の指示を聞きます。回答後は同じPRから再開できます。Tonarium 本体の Web checks は、`develop` 宛ての PR が変更履歴に触れると失敗させます。出荷時に PR が履歴を含んでいた場合は、統合担当が取り消してからチェックを実行します。統合後のテスト失敗も統合担当が修正と再検証を行い、1件の失敗でほかの出荷待ち PR が止まらないようにします。
 
-Bot には対象チャンネルで **View Channel、Read Message History、Create Public Threads、Send Messages in Threads** を与えてください。判断用フォーラムを使う場合は投稿権限も必要です。Message Content Intent の詳細は [Discord の公式資料](https://github.com/discord/discord-api-docs/blob/main/developers/events/gateway.mdx) を参照してください。
+Bot には対象チャンネルで **View Channel、Read Message History、Create Public Threads、Send Messages in Threads、Manage Webhooks** を与えてください。判断用フォーラムとリリース通知チャンネルにも、投稿権限と Manage Webhooks が必要です。Message Content Intent の詳細は [Discord の公式資料](https://github.com/discord/discord-api-docs/blob/main/developers/events/gateway.mdx) を参照してください。
 
 Codex の `gpt-6.1-sol` と Fast モードは [OpenAI Docs のモデル情報](https://learn.chatgpt.com/docs/models#gpt-61-sol) と [速度設定](https://learn.chatgpt.com/docs/agent-configuration/speed#fast-mode) に従っています。Fast はサブスクの利用枠を通常の 2.5 倍消費します。`CODEX_SPEED=standard` にすれば通常速度にできます。
 
-OpenAI API 翻訳は [Responses API の Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs#structured-outputs-vs-json-mode) で日英韓の三項目を受け取ります。API 方式を選んだ場合、翻訳対象の発言は OpenAI API に送信されます。
+OpenAI API 翻訳は [Responses API の Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs#structured-outputs-vs-json-mode) で原文の言語と日英韓の三項目を受け取ります。API 方式を選んだ場合、翻訳対象の発言は OpenAI API に送信されます。
 
 ## ダッシュボードと常駐
 

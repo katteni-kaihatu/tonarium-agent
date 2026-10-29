@@ -53,12 +53,17 @@ if (config.discordToken) {
       ['Read Message History',PermissionFlagsBits.ReadMessageHistory],
       ['Send Messages',PermissionFlagsBits.SendMessages],
       ['Create Public Threads',PermissionFlagsBits.CreatePublicThreads],
-      ['Send Messages in Threads',PermissionFlagsBits.SendMessagesInThreads]
+      ['Send Messages in Threads',PermissionFlagsBits.SendMessagesInThreads],
+      ['Manage Webhooks (posts as each agent)',PermissionFlagsBits.ManageWebhooks]
     ]) checks.push([`Discord ${name}`,permissions.has(flag),channel.name]);
+    if (config.decisionForumId) {
+      const forum = await bot.channels.fetch(config.decisionForumId).catch(() => null);
+      checks.push(['Decision forum Manage Webhooks',Boolean(forum?.permissionsFor?.(member)?.has(PermissionFlagsBits.ManageWebhooks)),forum?.name || config.decisionForumId]);
+    }
     if (config.releaseChannelId) {
       const releaseChannel = await bot.channels.fetch(config.releaseChannelId).catch(() => null);
       const releasePermissions = releaseChannel?.permissionsFor?.(member);
-      for (const [name,flag] of [['View Channel',PermissionFlagsBits.ViewChannel],['Send Messages',PermissionFlagsBits.SendMessages]]) {
+      for (const [name,flag] of [['View Channel',PermissionFlagsBits.ViewChannel],['Send Messages',PermissionFlagsBits.SendMessages],['Manage Webhooks',PermissionFlagsBits.ManageWebhooks]]) {
         checks.push([`Release channel ${name}`,Boolean(releasePermissions?.has(flag)),releaseChannel?.name || config.releaseChannelId]);
       }
     } else checks.push(['Release channel',true,'DISCORD_RELEASE_CHANNEL_ID is empty; main release results are not posted']);

@@ -8,6 +8,7 @@ import { GitHub } from './git.js';
 import { Translator } from './translation.js';
 import { Engine } from './engine.js';
 import { historyLine } from './discord.js';
+import { Poster } from './poster.js';
 
 const id = process.argv[2];
 if (!/^\d{17,20}$/.test(id || '')) throw new Error('Pass a Discord thread ID');
@@ -18,6 +19,7 @@ const ai = new AI(config);
 const git = new GitHub(config,root);
 const translator = new Translator(config,ai,root);
 const rest = new REST({version:'10'}).setToken(config.discordToken);
+const poster = new Poster(rest,translator);
 const discord = {
   async userMessage(threadId,messageId) {
     const message = await rest.get(Routes.channelMessage(threadId,messageId));
@@ -26,8 +28,9 @@ const discord = {
   async history(threadId) {
     const messages = await rest.get(Routes.channelMessages(threadId),{query:new URLSearchParams({limit:'100'})});
     const botId = (await rest.get(Routes.user('@me'))).id;
+    const webhooks = await poster.webhookIds(threadId);
     return messages.sort((a,b) => Date.parse(a.timestamp)-Date.parse(b.timestamp))
-      .map(message => historyLine({...message,attachments:new Map((message.attachments || []).map(attachment => [attachment.id,attachment]))},botId)).filter(Boolean).join('\n').slice(-20_000);
+      .map(message => historyLine({...message,attachments:new Map((message.attachments || []).map(attachment => [attachment.id,attachment]))},botId,webhooks)).filter(Boolean).join('\n').slice(-20_000);
   },
   async url(threadId) {
     const thread = await rest.get(Routes.channel(threadId));
@@ -38,16 +41,8 @@ const discord = {
     const starter = await rest.get(Routes.channelMessage(thread.parent_id,threadId)).catch(() => null);
     return starter?.author && !starter.author.bot ? starter.author.id : thread.owner_id || null;
   },
-  async say(threadId,text,{mentionUserId = ''} = {}) {
-    let message = `${/^\d{17,20}$/.test(mentionUserId) ? `<@${mentionUserId}> ` : ''}${text}`;
-    try {
-      const translated = await translator.translate(text);
-      message += `\n\n🌐 **翻訳 / Translations / 번역**\n🇯🇵 ${translated.ja}\n🇺🇸 ${translated.en}\n🇰🇷 ${translated.ko}`;
-    } catch (error) { console.error('Answer translation:',error); }
-    for (let offset = 0; offset < message.length; offset += 1900) {
-      const part = message.slice(offset,offset+1900);
-      await rest.post(Routes.channelMessages(threadId),{body:{content:part,allowed_mentions:mentionUserId && part.includes(`<@${mentionUserId}>`) ? {users:[mentionUserId]} : {parse:[]}}});
-    }
+  async say(threadId,text,options = {}) {
+    return poster.say(threadId,text,options);
   }
 };
 

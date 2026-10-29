@@ -73,11 +73,14 @@ export class Engine {
     this.onChange();
   }
   // 返事を待って止まるときだけ相手に通知し、進捗報告では通知しない
-  async askUser(id, text, { to = 'author' } = {}) {
+  post(id, as, text, options = {}) {
+    return this.discord.say(id,text,{...options,as});
+  }
+  async askUser(id, as, text, { to = 'author' } = {}) {
     const author = discordId(this.store.getKv(`last-author:${id}`));
     const owner = discordId(await this.discord.threadOwnerId?.(id).catch(() => null));
     const mentionUserId = (to === 'owner' ? owner || author : author || owner) || '';
-    return this.discord.say(id,text,{mentionUserId});
+    return this.discord.say(id,text,{mentionUserId,as});
   }
   addenda(id) {
     try { return asList(JSON.parse(this.store.getKv(`addenda:${id}`) || '[]').map(entry => entry?.text)); }
@@ -158,12 +161,12 @@ export class Engine {
     if (['queued','coding'].includes(ticket.status)) {
       this.addAddendum(id,ticket.last_message_id,text);
       this.event(id,'pm','addendum',trim(text || '追加の発言',300));
-      await this.discord.say(id,`**${roleName('pm')}｜PM**\n追加の内容を受け取りました。${ticket.status === 'coding' ? '実装中の作業に、PR を作る前に反映します。' : '実装を始めるときに一緒に渡します。'}`);
+      await this.post(id, 'pm', `追加の内容を受け取りました。${ticket.status === 'coding' ? '実装中の作業に、PR を作る前に反映します。' : '実装を始めるときに一緒に渡します。'}`);
       return;
     }
     this.store.setKv(`pending-followup:${id}`,'1');
     this.event(id,'pm','followup_deferred',trim(text || '追加の発言',300));
-    await this.discord.say(id,`**${roleName('pm')}｜PM**\nPR #${ticket.pr_number} は ${this.config.baseBranch || 'develop'} へのマージ作業中です。マージが終わったらこの発言を確認して、続けて対応します。`);
+    await this.post(id, 'pm', `PR #${ticket.pr_number} は ${this.config.baseBranch || 'develop'} へのマージ作業中です。マージが終わったらこの発言を確認して、続けて対応します。`);
   }
   async groupedMessage(id) {
     const ticket = this.store.get(id);
@@ -178,7 +181,7 @@ export class Engine {
     const url = await this.discord.url?.(id).catch(() => '') || id;
     this.addAddendum(parent.id,ticket.last_message_id,text && `${url} から: ${text}`);
     this.event(parent.id,'pm','addendum',trim(text || '追加の発言',300));
-    await this.discord.say(id,`**${roleName('pm')}｜PM**\nこの声は「${parent.title}」にまとめています。追加の内容をまとめ先の作業に渡しました。`);
+    await this.post(id, 'pm', `この声は「${parent.title}」にまとめています。追加の内容をまとめ先の作業に渡しました。`);
   }
   async resumeStopped(id) {
     if (this.active.has(id)) { this.pendingFeedback.add(id); return; }
@@ -195,7 +198,7 @@ export class Engine {
     const text = await this.latestUserText(id);
     if (!this.restrictedDecision(id) || author === this.config.decisionMentionId) return this.decision(id,text,author,id);
     const url = ticket.decision_thread_id ? await this.discord.url?.(ticket.decision_thread_id).catch(() => '') : '';
-    await this.discord.say(id,`**${roleName('pm')}｜PM**\nこの判断は決定者に確認しています。回答が出たらこのスレッドでお知らせします。${url ? `\n判断用の投稿: ${url}` : ''}`);
+    await this.post(id, 'pm', `この判断は決定者に確認しています。回答が出たらこのスレッドでお知らせします。${url ? `\n判断用の投稿: ${url}` : ''}`);
   }
   async releaseInstruction(id) {
     if (this.active.has(id)) return;
@@ -208,7 +211,7 @@ export class Engine {
       role = await this.acquireRole('PM',id);
       const decision = await this.ai.ask(role.name, `出荷検証が2回失敗して停止したPRについて、スレ主から回答がありました。保留・中止の指示なら retry=false。修正または再試行の指示なら retry=true とし、統合担当への具体的な指示を書いてください。返す JSON: {"retry":boolean,"instruction":"統合担当への指示","reason":"判断理由"}。\n\n案件: ${ticket.title}\nPR #${ticket.pr_number}\n失敗: ${ticket.error}\nスレ主の回答: ${answer}`, {provider:this.config.intakeProvider || 'codex',cwd:this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
       if (decision.retry !== true) {
-        await this.discord.say(id,`**${role.name}｜PM**\n出荷を保留します。${trim(decision.reason || '再開する場合は、このスレッドで指示してください。',500)}`);
+        await this.post(id, role.id, `出荷を保留します。${trim(decision.reason || '再開する場合は、このスレッドで指示してください。',500)}`);
         return;
       }
       this.store.setKv(`release-instruction:${id}`,trim(decision.instruction || answer,1500));
@@ -219,11 +222,11 @@ export class Engine {
       this.store.setKv(`release-retry-after:${id}`,0);
       this.store.update(id,{status:'pr_ready',error:null,answered_message_id:ticket.last_message_id});
       this.event(id,role.id,'pr_ready',`スレ主の指示を受け、PR #${ticket.pr_number} の修正と再検証を再開`);
-      await this.discord.say(id,`**${role.name}｜PM**\n指示を受け取りました。PR #${ticket.pr_number} を修正・再検証します。`);
+      await this.post(id, role.id, `指示を受け取りました。PR #${ticket.pr_number} を修正・再検証します。`);
       await this.tick();
     } catch (error) {
       this.event(id,role?.id || 'pm','instruction_warning',trim(error.message,500));
-      await this.discord.say(id,`**${role?.name || roleName('pm')}｜PM**\n回答の処理に失敗しました。もう一度指示してください。${trim(error.message,300)}`).catch(() => {});
+      await this.post(id, role?.id || 'pm', `回答の処理に失敗しました。もう一度指示してください。${trim(error.message,300)}`).catch(() => {});
     } finally {
       if (role) this.releaseRole(role);
       this.active.delete(id);
@@ -275,7 +278,7 @@ ${history}
       if (duplicate) {
         this.store.update(id, { status:'grouped', parent_ticket_id:duplicate.id });
         this.event(id,intakeRole.id,'grouped',`${duplicate.title} と同じ要望としてまとめました`);
-        await this.discord.say(id, `**${intakeRole.name}｜聞き取り**\n${trim(result.reply || `「${duplicate.title}」と同じ方向の声としてまとめました。追加の観点も開発担当へ渡します。`)}`);
+        await this.post(id, intakeRole.id, trim(result.reply || `「${duplicate.title}」と同じ方向の声としてまとめました。追加の観点も開発担当へ渡します。`));
         return;
       }
       const evidence = String(result.evidencePath || '').replace(/\\/g,'/');
@@ -284,16 +287,16 @@ ${history}
       if (result.alreadyExists && insideRepo && existsSync(evidenceFile)) {
         this.store.update(id, { status:'resolved_existing', answered_message_id:this.store.get(id).last_message_id });
         this.event(id,intakeRole.id,'existing',`既存機能で対応: ${evidence}`);
-        await this.discord.say(id, `**${intakeRole.name}｜聞き取り**\n${trim(result.reply || 'この機能はすでにあります。')}`);
+        await this.post(id, intakeRole.id, trim(result.reply || 'この機能はすでにあります。'));
         return;
       }
       if (!result.ready) {
         this.store.update(id, { status: 'waiting_info' });
         this.event(id, intakeRole.id, 'question', trim(result.reply || '追加情報を待っています'));
-        await this.askUser(id, `**${intakeRole.name}｜聞き取り**\n${trim(result.reply || '詳しい状況を教えてください。')}`);
+        await this.askUser(id, intakeRole.id, trim(result.reply || '詳しい状況を教えてください。'));
         return;
       }
-      if (result.reply) await this.discord.say(id, `**${intakeRole.name}｜聞き取り**\n${trim(result.reply)}`);
+      if (result.reply) await this.post(id, intakeRole.id, trim(result.reply));
       this.store.update(id, { status: 'planning' });
       if (ticket.status === 'waiting_info' && this.store.getKv(`awaiting-instruction:${id}`) === '1') {
         this.store.setKv(`awaiting-instruction:${id}`,'0');
@@ -326,7 +329,7 @@ ${history}
       const messageId = ticket.last_message_id;
       if (!messageId || messageId === ticket.answered_message_id) return;
       const busy = roles.filter(role => role.job === '実装案内').every(role => this.roleBusy.has(role.id));
-      if (busy) await this.discord.say(id,`**${roleName('support')}｜実装案内**\n確認の順番待ちです。少しお待ちください。`).catch(() => {});
+      if (busy) await this.post(id, 'support', `確認の順番待ちです。少しお待ちください。`).catch(() => {});
       supportRole = await this.acquireRole('実装案内',id);
       const question = await this.discord.userMessage(id,messageId);
       if (!question) return;
@@ -339,19 +342,19 @@ ${history}
       if (result.action === 'new_fix') {
         const previousPr = ticket.pr_number;
         this.startRound(id,messageId,result);
-        await this.discord.say(id, `**${supportRole.name}｜実装案内**\n${previousPr ? `前回の対応（PR #${previousPr}）` : 'ここまでの内容'}を引き継いで、このスレッドで続けて対応します。`);
+        await this.post(id, supportRole.id, `${previousPr ? `前回の対応（PR #${previousPr}）` : 'ここまでの内容'}を引き継いで、このスレッドで続けて対応します。`);
         if (!this.deferRounds) this.pendingFeedback.add(id);
         return;
       }
       const answer = trim(result.answer,4000);
       if (!answer) throw new Error('Implementation answer was empty');
-      if (result.action === 'clarify') await this.askUser(id, `**${supportRole.name}｜実装案内**\n${answer}`);
-      else await this.discord.say(id, `**${supportRole.name}｜実装案内**\n${answer}`);
+      if (result.action === 'clarify') await this.askUser(id, supportRole.id, answer);
+      else await this.post(id, supportRole.id, answer);
       this.store.update(id,{answered_message_id:messageId});
       this.event(id,supportRole.id,'answered',trim(question,300));
     } catch (error) {
       this.event(id,supportRole?.id || 'support','answer_failed',trim(error.message,500));
-      await this.discord.say(id, `**${supportRole?.name || roleName('support')}｜実装案内**\n実装内容の確認中に問題が起きました。少し後で再度質問してください。`).catch(() => {});
+      await this.post(id, supportRole?.id || 'support', `実装内容の確認中に問題が起きました。少し後で再度質問してください。`).catch(() => {});
     } finally {
       if (snapshot) await this.git.removeWorktree(snapshot.path);
       if (supportRole) this.releaseRole(supportRole);
@@ -391,16 +394,16 @@ ${history}
       }
       if (result.action === 'appeal') {
         if (!discordId(this.config.decisionMentionId)) {
-          await this.discord.say(id,`**${role.name}｜PM**\n見送りへの異議を判断する決定者が設定されていないため、受け付けられません。運用担当に連絡してください。`);
+          await this.post(id, role.id, `見送りへの異議を判断する決定者が設定されていないため、受け付けられません。運用担当に連絡してください。`);
           return;
         }
         await this.askDecision(id,`見送った依頼に異議が出ました。実装を進めるか、見送りを維持するかを決めてください。\n見送り理由: ${trim(reason,800)}\n依頼者の発言: ${trim(text,800)}`,'appeal');
         return;
       }
-      if (result.reply) await this.discord.say(id,`**${role.name}｜PM**\n${trim(result.reply,1000)}`);
+      if (result.reply) await this.post(id, role.id, trim(result.reply,1000));
     } catch (error) {
       this.event(id,role?.id || 'pm','appeal_warning',trim(error.message,500));
-      await this.discord.say(id,`**${role?.name || roleName('pm')}｜PM**\n発言の確認中に問題が起きました。少し後でもう一度書いてください。`).catch(() => {});
+      await this.post(id, role?.id || 'pm', `発言の確認中に問題が起きました。少し後でもう一度書いてください。`).catch(() => {});
     } finally {
       if (role) this.releaseRole(role);
       this.active.delete(id);
@@ -443,7 +446,7 @@ ${history}
     if (duplicate) {
       this.store.update(id, { status: 'grouped', parent_ticket_id: duplicate.id, summary: trim(result.summary || ticket.summary, 3000) });
       this.event(id, 'pm', 'grouped', `${duplicate.title} に統合`);
-      await this.discord.say(id, `**${roleName('pm')}｜PM**\nこの声は既存の「${duplicate.title}」にまとめました。追加の観点として開発担当へ渡します。`);
+      await this.post(id, 'pm', `この声は既存の「${duplicate.title}」にまとめました。追加の観点として開発担当へ渡します。`);
       return;
     }
     const verdict = verdicts.includes(result.verdict) ? result.verdict : result.needsDecision ? 'decision' : 'implement';
@@ -458,7 +461,7 @@ ${history}
       this.store.setKv(`decline:${id}`,reason);
       this.store.update(id,{status:'declined',answered_message_id:this.store.get(id).last_message_id});
       this.event(id,'pm','declined',reason);
-      await this.askUser(id,`**${roleName('pm')}｜PM**\nこの依頼は見送ります。${reason}${result.proposal ? `\n代わりの案: ${trim(result.proposal,1000)}` : ''}\n見送りに異議がある場合は、このスレッドに理由を書いてください。決定者が判断します。`,{to:'owner'});
+      await this.askUser(id, 'pm', `この依頼は見送ります。${reason}${result.proposal ? `\n代わりの案: ${trim(result.proposal,1000)}` : ''}\n見送りに異議がある場合は、このスレッドに理由を書いてください。決定者が判断します。`,{to:'owner'});
       return;
     }
     if (verdict === 'propose') {
@@ -466,7 +469,7 @@ ${history}
       this.store.setKv(`proposal:${id}`,text);
       this.store.update(id,{status:'proposal'});
       this.event(id,'pm','proposal',trim(text,500));
-      await this.askUser(id,`**${roleName('pm')}｜PM**\n${text}\nこの方向で進めてよいか、別の案がよいかを、このスレッドで返信してください。`,{to:'owner'});
+      await this.askUser(id, 'pm', `${text}\nこの方向で進めてよいか、別の案がよいかを、このスレッドで返信してください。`,{to:'owner'});
       return;
     }
     if (verdict === 'decision') {
@@ -485,7 +488,7 @@ ${history}
     this.store.update(id, { status: 'queued', error: null });
     this.store.setKv(`task:${id}`, trim(lead.task || result.implementationTask || summary, 12000));
     this.event(id, leadRole.id, 'queued', trim(lead.risk || '実装担当へ割り当て待ち', 500));
-    await this.discord.say(id, `**${leadRole.name}｜開発リード**\n案件として受け付けました。${criteria.length ? `受け入れ条件: ${criteria.join(' / ')}` : ''}`);
+    await this.post(id, leadRole.id, `案件として受け付けました。${criteria.length ? `受け入れ条件: ${criteria.join(' / ')}` : ''}`);
     await this.tick();
   }
   restrictedDecision(id) {
@@ -499,7 +502,7 @@ ${history}
     const decisionThread = await this.discord.decision(ticket, question, {mentionUserId:fallback});
     this.store.update(id, { decision_thread_id: decisionThread || null });
     this.event(id, 'pm', 'decision', question);
-    if (decisionThread) await this.discord.say(id, `**${roleName('pm')}｜PM**\n${kind === 'appeal' ? '見送りへの異議を決定者に確認しています。' : '判断が必要な点をフォーラムにまとめました。'}回答後に続行します。`);
+    if (decisionThread) await this.post(id, 'pm', `${kind === 'appeal' ? '見送りへの異議を決定者に確認しています。' : '判断が必要な点をフォーラムにまとめました。'}回答後に続行します。`);
   }
   async decision(id, text, author, channelId = '') {
     if (this.active.has(id)) return;
@@ -507,7 +510,7 @@ ${history}
     if (ticket?.status !== 'decision') return;
     const appeal = this.store.getKv(`decision-kind:${id}`) === 'appeal';
     if (this.restrictedDecision(id) && author !== this.config.decisionMentionId) {
-      await this.discord.say(channelId || ticket.decision_thread_id || id,`**${roleName('pm')}｜PM**\nこの判断は決定者の回答で決めます。決定者の回答を待っています。`).catch(() => {});
+      await this.post(channelId || ticket.decision_thread_id || id, 'pm', `この判断は決定者の回答で決めます。決定者の回答を待っています。`).catch(() => {});
       return;
     }
     this.active.add(id);
@@ -617,7 +620,7 @@ ${history}
         if (/NEEDS_CLARIFICATION/i.test(report)) {
           this.store.update(id, { status: 'waiting_info', worker: null });
           this.event(id, worker.id, 'question', trim(report, 500));
-          await this.askUser(id, `**${worker.name}｜実装**\n追加確認が必要です。${trim(report, 1200)}`);
+          await this.askUser(id, worker.id, `追加確認が必要です。${trim(report, 1200)}`);
           return;
         }
         const review = await this.designReview(id,ticket,task,worktree.path);
@@ -648,7 +651,7 @@ ${history}
       this.store.setKv(`retry-instruction:${id}`,'');
       this.event(id, worker.id, 'pr_ready', `PR #${pr} を検証済み。出荷待ち`);
       completed = true;
-      await this.discord.say(id, `**${worker.name}｜実装**\n変更とテストが完了しました。PR #${pr} を出荷待ちに入れました。`).catch(error => this.event(id,worker.id,'discord_warning',trim(error.message,300)));
+      await this.post(id, worker.id, `変更とテストが完了しました。PR #${pr} を出荷待ちに入れました。`).catch(error => this.event(id,worker.id,'discord_warning',trim(error.message,300)));
     } catch (error) {
       const retryStage = stage === 'publish' && /^git (?:add|commit|status)\b/.test(error.message) ? 'code' : stage;
       const priorFailures = Math.max(Number(this.store.getKv(`failure-count:${id}`) || 0),Number(this.store.getKv(`retry-count:${id}:code`) || 0),Number(this.store.getKv(`retry-count:${id}:publish`) || 0));
@@ -685,7 +688,7 @@ ${history}
     this.store.setKv(`retry-instruction:${id}`,trim(decision.instruction,1000));
     this.store.update(id,{status:'queued',branch:worktree.branch,worker:null,error:trim(error.message,2000)});
     this.event(id,'pm','retry_scheduled',`${stage === 'publish' ? 'GitHub への送信' : '実装・検証'}を再試行 (${attempt + 1}回目): ${trim(decision.reason,300)}`);
-    await this.discord.say(id, `**${role.name}｜PM**\n${stage === 'publish' ? 'GitHub への送信' : '実装・検証'}で問題が起きたため、作業ツリーを残して再試行します。${trim(decision.reason,300)}`).catch(() => {});
+    await this.post(id, role.id, `${stage === 'publish' ? 'GitHub への送信' : '実装・検証'}で問題が起きたため、作業ツリーを残して再試行します。${trim(decision.reason,300)}`).catch(() => {});
     return true;
   }
   async reviewFailed(id) {
@@ -708,14 +711,14 @@ ${history}
       if (decision.retry !== true) {
         this.store.setKv(countKey,3);
         this.event(id,role.id,'needs_attention',trim(decision.reason || '人の確認が必要です',500));
-        await this.askUser(id, `**${role.name}｜PM**\n再試行を止めました。${trim(decision.reason || '人の確認が必要です',500)}\n次の方針をこのスレッドに書いてもらえれば、作業ツリーを引き継いで再開します。`,{to:'owner'}).catch(() => {});
+        await this.askUser(id, role.id, `再試行を止めました。${trim(decision.reason || '人の確認が必要です',500)}\n次の方針をこのスレッドに書いてもらえれば、作業ツリーを引き継いで再開します。`,{to:'owner'}).catch(() => {});
         return;
       }
       this.store.setKv(`retry-stage:${id}`,'code');
       this.store.setKv(`retry-instruction:${id}`,trim(decision.instruction,1000));
       this.store.update(id,{status:'queued',worker:null});
       this.event(id,role.id,'retry_scheduled',`停止案件を再開 (${count}/3): ${trim(decision.reason,500)}`);
-      await this.discord.say(id, `**${role.name}｜PM**\n作業ツリーを引き継いで再試行します。${trim(decision.reason,400)}`).catch(() => {});
+      await this.post(id, role.id, `作業ツリーを引き継いで再試行します。${trim(decision.reason,400)}`).catch(() => {});
     } catch (error) {
       this.event(id,role?.id || 'pm','retry_review_warning',trim(error.message,500));
     } finally {
@@ -746,7 +749,7 @@ ${history}
     }
     this.event(id,'pm','needs_instruction',question);
     const ownerId = await this.discord.threadOwnerId?.(id).catch(() => null);
-    await this.discord.say(id,`**${roleName('pm')}｜PM 🙋**\n${question}`,{mentionUserId:ownerId}).catch(error => this.event(id,'pm','discord_warning',trim(error.message,300)));
+    await this.post(id, 'pm', question,{mentionUserId:ownerId}).catch(error => this.event(id,'pm','discord_warning',trim(error.message,300)));
   }
   async pmReviewReleaseFailure(ticket,error,worktreePath = '') {
     const id = ticket.id;
@@ -763,7 +766,7 @@ ${history}
         this.store.update(id,{status:'pr_ready',error:trim(error.message,2000)});
         this.store.setKv(`release-retry-after:${id}`,Date.now() + 30_000);
         this.event(id,role.id,'release_retry',`PMがCI失敗を調査し、統合担当に修正を指示 (${repairs + 1}/2): ${trim(decision.reason,300)}`);
-        await this.discord.say(id,`**${role.name}｜PM**\nPR #${ticket.pr_number} の失敗を確認しました。統合担当に修正と再検証を指示します。${trim(decision.reason,400)}`).catch(() => {});
+        await this.post(id, role.id, `PR #${ticket.pr_number} の失敗を確認しました。統合担当に修正と再検証を指示します。${trim(decision.reason,400)}`).catch(() => {});
         return;
       }
     } catch (reviewError) {
@@ -902,12 +905,12 @@ ${history}
     this.event(ticket.id,'release','merged',`PR #${ticket.pr_number} を ${branch} へマージ: ${sha?.slice(0,8) || ''}`);
     await this.threadStatusUpdates.get(ticket.id);
     if (ticket.issue_number) await this.git.closeIssue(ticket.issue_number, `PR #${ticket.pr_number} merged into ${branch}`).catch(error => this.event(ticket.id,'release','issue_warning',error.message));
-    await this.discord.say(ticket.id, `**${roleName('release')}｜出荷**\nPR #${ticket.pr_number} のチェックを確認し、${branch} にマージしました。${sha ? `\nマージ commit: ${sha.slice(0,8)}` : ''}`).catch(error => this.event(ticket.id,'release','discord_warning',error.message));
+    await this.post(ticket.id, 'release', `PR #${ticket.pr_number} のチェックを確認し、${branch} にマージしました。${sha ? `\nマージ commit: ${sha.slice(0,8)}` : ''}`).catch(error => this.event(ticket.id,'release','discord_warning',error.message));
   }
   async fail(id, actor, error) {
     const message = trim(error?.message || error, 2000);
     this.store.update(id, { status: 'failed', error: message, worker: null });
     this.event(id, actor, 'failed', message);
-    await this.discord.say(id, `**${roleName(actor)}**\n処理を止めました。PMが原因を確認し、再試行を判断します。${trim(message, 500)}`).catch(() => {});
+    await this.post(id, actor, `処理を止めました。PMが原因を確認し、再試行を判断します。${trim(message, 500)}`).catch(() => {});
   }
 }
