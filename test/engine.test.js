@@ -426,7 +426,8 @@ test('intake questions mention the person who needs to answer, progress replies 
     f.engine.ai = {ask:async () => ({ready:true,reply:'整理できました。',title:'地図',summary:'拡大',criteria:[]})};
     f.engine.plan = async () => {};
     await f.engine.feedback('feedback');
-    assert.equal(f.sent.at(-1).options,undefined);
+    assert.equal(f.sent.at(-1).options.mentionUserId,undefined);
+    assert.match(f.sent.at(-1).options.as,/^intake/);
   } finally { f.close(); }
 });
 

@@ -1,26 +1,24 @@
 import { Client, GatewayIntentBits, ChannelType, escapeMarkdown } from 'discord.js';
+import { Poster } from './poster.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { syncThreadStatus } from './thread-status.js';
 
-const translationBlock = '\n\n🌐 **翻訳 / Translations / 번역**';
+const legacyTranslationBlock = '\n\n🌐 **翻訳 / Translations / 번역**';
+const translationBlock = /\n\n(?=(?:🇯🇵|🇺🇸|🇰🇷) )/u;
 
 // 翻訳の併記は同じ内容の繰り返しなので、AI に渡す会話から外す
-export function historyLine(message, botId) {
-  const own = message.author?.id === botId;
+export function historyLine(message, botId, webhooks = {}) {
+  const webhookId = message.webhookId || message.webhook_id || '';
+  if (webhookId && webhookId === webhooks.translation) return '';
+  const own = message.author?.id === botId || Boolean(webhookId && webhookId === webhooks.agent);
   if (message.author?.bot && !own) return '';
   const content = String(message.content || '');
   if (own && content.startsWith('🌐 **')) return '';
-  const text = own ? content.split(translationBlock)[0].trim() : content;
+  const text = own ? content.split(legacyTranslationBlock)[0].split(translationBlock)[0].trim() : content;
   const attachments = message.attachments?.size ? ` [添付: ${[...message.attachments.values()].map(x => x.url).join(', ')}]` : '';
   return `${own ? `Bot(${message.author.username})` : message.author?.username || 'user'}: ${text || '[添付のみ]'}${attachments}`;
-}
-
-function chunk(text, limit = 1900) {
-  const result = [];
-  for (let i = 0; i < text.length; i += limit) result.push(text.slice(i, i + limit));
-  return result;
 }
 
 export class DiscordTransport {
@@ -36,6 +34,11 @@ export class DiscordTransport {
     this.ownThreads = new Set();
     this.seedMessages = new Map();
     this.translatedMessageIds = new Set();
+    this.poster = null;
+  }
+  get speaker() {
+    this.poster ||= new Poster(this.client.rest,this.translator);
+    return this.poster;
   }
   async start() {
     if (!this.config.discordToken) return false;
@@ -101,8 +104,9 @@ export class DiscordTransport {
     const messages = await thread.messages.fetch({ limit: 100 });
     const starter = await thread.fetchStarterMessage().catch(() => null);
     if (starter) messages.set(starter.id,starter);
+    const webhooks = await this.speaker.webhookIds(threadId);
     const history = [...messages.values()].sort((a,b) => a.createdTimestamp - b.createdTimestamp)
-      .map(message => historyLine(message,this.client.user?.id)).filter(Boolean).join('\n').slice(-20_000);
+      .map(message => historyLine(message,this.client.user?.id,webhooks)).filter(Boolean).join('\n').slice(-20_000);
     if (starter) this.seedMessages.delete(threadId);
     return history || this.seedMessages.get(threadId) || '';
   }
@@ -141,31 +145,19 @@ export class DiscordTransport {
     if (!message || message.id !== messageId || message.author.bot) return '';
     return `${message.author.username}: ${message.content || '[添付のみ]'}${message.attachments.size ? ` [添付: ${[...message.attachments.values()].map(attachment => attachment.url).join(', ')}]` : ''}`;
   }
-  async sendRaw(threadId, text, mentionUserId = '') {
-    if (!this.config.discordToken) return;
-    const thread = await this.client.channels.fetch(threadId);
-    for (const part of chunk(text)) await thread.send({ content: part, allowedMentions: mentionUserId && part.includes(`<@${mentionUserId}>`) ? { users: [mentionUserId] } : { parse: [] } });
-  }
   async translateUser(message, threadId) {
-    if (!this.translator || !message.content?.trim() || this.translatedMessageIds.has(message.id)) return;
+    if (!this.config.discordToken || !this.translator || !message.content?.trim() || this.translatedMessageIds.has(message.id)) return;
     this.translatedMessageIds.add(message.id);
     if (this.translatedMessageIds.size > 1000) this.translatedMessageIds.clear();
     try {
-      const result = await this.translator.translate(message.content);
-      const name = escapeMarkdown(message.author.displayName || message.author.username || 'user').slice(0,80);
-      await this.sendRaw(threadId, `🌐 **${name} の発言 / message / 메시지**\n🇯🇵 ${result.ja}\n🇺🇸 ${result.en}\n🇰🇷 ${result.ko}`);
+      const username = escapeMarkdown(message.member?.displayName || message.author.displayName || message.author.username || 'user').slice(0,80);
+      const avatarURL = message.member?.displayAvatarURL?.({extension:'png',size:256}) || message.author.displayAvatarURL?.({extension:'png',size:256}) || '';
+      await this.speaker.relay(threadId,message.content,{username,avatarURL});
     } catch (error) { console.error('translation of user message', error); }
   }
-  async say(threadId, text, { mentionUserId = '' } = {}) {
-    const mention = /^\d{17,20}$/.test(mentionUserId) ? `<@${mentionUserId}> ` : '';
-    if (!this.translator) return this.sendRaw(threadId,mention + text,mentionUserId);
-    try {
-      const result = await this.translator.translate(text);
-      return this.sendRaw(threadId, `${mention}${text}\n\n🌐 **翻訳 / Translations / 번역**\n🇯🇵 ${result.ja}\n🇺🇸 ${result.en}\n🇰🇷 ${result.ko}`,mentionUserId);
-    } catch (error) {
-      console.error('translation of bot message', error);
-      return this.sendRaw(threadId,mention + text,mentionUserId);
-    }
+  async say(threadId, text, { mentionUserId = '', as = '' } = {}) {
+    if (!this.config.discordToken) return;
+    return this.speaker.say(threadId,text,{mentionUserId,as});
   }
   async threadOwnerId(threadId) {
     const thread = await this.client.channels.fetch(threadId);
@@ -182,7 +174,7 @@ export class DiscordTransport {
   }
   async decision(ticket, question, { mentionUserId = '' } = {}) {
     if (!this.config.decisionForumId) {
-      await this.say(ticket.id, `👥 判断が必要です。${question}\nこのスレッドで回答してください。`,{mentionUserId});
+      await this.say(ticket.id, `👥 判断が必要です。${question}\nこのスレッドで回答してください。`,{mentionUserId,as:'pm'});
       return '';
     }
     const forum = await this.client.channels.fetch(this.config.decisionForumId);
@@ -192,7 +184,7 @@ export class DiscordTransport {
       name: `判断依頼｜${ticket.title}`.slice(0, 100),
       message: { content: `${mention}**${ticket.title}**\n元のフィードバック: https://discord.com/channels/${forum.guildId}/${ticket.id}`, allowedMentions: this.config.decisionMentionId ? { users: [this.config.decisionMentionId] } : { parse: [] } }
     });
-    await this.say(post.id, `**背景**\n${ticket.summary}\n\n**確認したいこと**\n${question}`);
+    await this.say(post.id, `**背景**\n${ticket.summary}\n\n**確認したいこと**\n${question}`,{as:'pm'});
     return post.id;
   }
   async stop() { this.client.destroy(); }

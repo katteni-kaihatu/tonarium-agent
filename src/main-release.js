@@ -215,7 +215,7 @@ export class MainRelease {
       this.store.setKv('main-release:last-error','');
       log(`Merged release PR #${number}`);
       const list = files.length ? `\n${files.map(({content}) => `- ${content.title}`).join('\n')}` : '';
-      await this.notify(`**${roleName('mainrelease')}｜リリース**\ndevelop の変更を ${this.main} に反映しました（PR #${number}）。${list}`).catch(error => console.error('Release notification:',error));
+      await this.notify(`develop の変更を ${this.main} に反映しました（PR #${number}）。${list}`).catch(error => console.error('Release notification:',error));
       return {status:'merged',number,sha};
     } catch (error) {
       await this.failed(snapshot,error,number);
@@ -234,6 +234,6 @@ export class MainRelease {
     // 同じ理由で止まり続けるときは一度だけ知らせる
     if (this.store.getKv('main-release:last-error') === message) return;
     this.store.setKv('main-release:last-error',message);
-    await this.notify(`**${roleName('mainrelease')}｜リリース 🙋**\n${this.main} への反映を止めました。${number ? `リリース PR #${number}: https://github.com/${this.config.githubRepo}/pull/${number}\n` : ''}理由: ${message}\ndevelop が更新されたら自動で作り直します。`,{mention:true}).catch(notifyError => console.error('Release notification:',notifyError));
+    await this.notify(`${this.main} への反映を止めました。${number ? `リリース PR #${number}: https://github.com/${this.config.githubRepo}/pull/${number}\n` : ''}理由: ${message}\ndevelop が更新されたら自動で作り直します。`,{mention:true}).catch(notifyError => console.error('Release notification:',notifyError));
   }
 }
