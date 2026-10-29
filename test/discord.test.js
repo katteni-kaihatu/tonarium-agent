@@ -31,18 +31,21 @@ test('a parent-channel message becomes one feedback thread', async () => {
   } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
 });
 
-function fakeRest({ webhooks = true } = {}) {
-  const posts = [], hooks = [];
+function fakeRest({ webhooks = true, existing = [] } = {}) {
+  const posts = [], hooks = [...existing], deleted = [];
   return {
-    posts, hooks,
+    posts, hooks, deleted, failOn:null,
     async get(route) {
+      if (route === '/users/%40me') return {id:'bot-1'};
       if (route === '/channels/thread-1') return {type:11,parent_id:'channel-1'};
       if (route === '/channels/release-1') return {type:0};
-      if (route.endsWith('/webhooks')) { if (!webhooks) throw new Error('Missing Permissions'); return hooks; }
+      if (route.endsWith('/webhooks')) { if (!webhooks) throw new Error('Missing Permissions'); return hooks.filter(hook => !deleted.includes(hook.id)); }
       throw new Error(`unexpected GET ${route}`);
     },
+    async delete(route) { deleted.push(route.split('/').pop()); },
     async post(route, options) {
-      if (route.endsWith('/webhooks')) { const hook = {id:`hook-${hooks.length + 1}`,token:'secret',name:options.body.name}; hooks.push(hook); return hook; }
+      if (route.endsWith('/webhooks')) { const hook = {id:`hook-${hooks.length + 1}`,token:'secret',name:options.body.name,user:{id:'bot-1'}}; hooks.push(hook); return hook; }
+      if (this.failOn && this.failOn(route,options)) throw Object.assign(new Error('Unknown Webhook'),{status:404});
       posts.push({route,...options});
       return {};
     }
@@ -58,7 +61,7 @@ test('agents post with their own name and avatar and show only the other languag
     const rest = fakeRest();
     transport.poster = new Poster(rest,translator);
     await transport.say('thread-1','どうされました？',{as:'pm',mentionUserId:'12345678901234567'});
-    await transport.translateUser({id:'msg-1',content:'Hello',author:{username:'kokoa'},member:{displayName:'ここあ',displayAvatarURL:() => 'https://cdn.example/kokoa.png'}},'thread-1');
+    await transport.translateUser({id:'msg-1',content:'Hello',author:{username:'kokoa'},member:{displayName:'ここあ_dev',displayAvatarURL:() => 'https://cdn.example/kokoa.png'}},'thread-1');
     assert.deepEqual(rest.hooks.map(hook => hook.name),['Tonarium Agent','Tonarium Agent 通訳']);
     const [agent,relay] = rest.posts;
     assert.equal(agent.route,'/webhooks/hook-1/secret');
@@ -68,7 +71,7 @@ test('agents post with their own name and avatar and show only the other languag
     assert.equal(agent.body.content,'<@12345678901234567> どうされました？\n\n🇺🇸 What happened?\n🇰🇷 무슨 일이세요?');
     assert.deepEqual(agent.body.allowed_mentions,{users:['12345678901234567']});
     assert.equal(relay.route,'/webhooks/hook-2/secret');
-    assert.equal(relay.body.username,'ここあ');
+    assert.equal(relay.body.username,'ここあ_dev');
     assert.equal(relay.body.avatar_url,'https://cdn.example/kokoa.png');
     assert.equal(relay.body.content,'🇯🇵 こんにちは\n🇰🇷 안녕하세요');
     transport.client.destroy();
@@ -87,10 +90,39 @@ test('without webhook permission posts fall back to the bot with the agent name 
 
 test('history keeps agent webhook replies and drops relayed translations', () => {
   const message = (author,content,webhookId = '') => ({author,content,webhookId,attachments:new Map()});
-  const webhooks = {agent:'hook-1',translation:'hook-2'};
+  const webhooks = {agent:new Set(['hook-1','hook-3']),translation:new Set(['hook-2'])};
   assert.equal(historyLine(message({id:'hook-1',bot:true,username:'さくら｜PM'},'進めます。\n\n🇺🇸 Proceeding.','hook-1'),'bot-1',webhooks),'Bot(さくら｜PM): 進めます。');
+  assert.equal(historyLine(message({id:'hook-3',bot:true,username:'ひより｜聞き取り'},'どの画面ですか？','hook-3'),'bot-1',webhooks),'Bot(ひより｜聞き取り): どの画面ですか？');
   assert.equal(historyLine(message({id:'hook-2',bot:true,username:'ここあ'},'🇺🇸 Hello','hook-2'),'bot-1',webhooks),'');
   assert.equal(historyLine(message({id:'bot-1',bot:true,username:'tonarium'},'**さくら｜PM**\n進めます。\n\n🌐 **翻訳 / Translations / 번역**\n🇺🇸 x'),'bot-1',webhooks),'Bot(tonarium): **さくら｜PM**\n進めます。');
+});
+
+test('webhooks are reused, unreadable ones replaced, and deleted ones recreated', async () => {
+  const rest = fakeRest({existing:[
+    {id:'old-agent',name:'Tonarium Agent',user:{id:'bot-1'}},
+    {id:'human-hook',name:'Tonarium Agent 通訳',token:'other',user:{id:'someone'}},
+    {id:'old-translation',name:'Tonarium Agent 通訳',token:'secret',user:{id:'bot-1'}}
+  ]});
+  const poster = new Poster(rest,null);
+  await poster.say('thread-1','一つ目',{as:'pm'});
+  assert.deepEqual(rest.deleted,['old-agent']);
+  assert.equal(rest.posts[0].route,'/webhooks/hook-4/secret');
+  assert.deepEqual([...(await poster.webhookIds('thread-1')).translation],['old-translation']);
+  rest.failOn = route => route === '/webhooks/hook-4/secret';
+  await poster.say('thread-1','二つ目',{as:'pm'});
+  assert.equal(rest.posts.at(-1).route,'/channels/thread-1/messages');
+  rest.failOn = null;
+  await poster.say('thread-1','三つ目',{as:'pm'});
+  assert.equal(rest.posts.at(-1).route,'/webhooks/hook-4/secret');
+});
+
+test('a long post that fails midway sends only the rest as the bot', async () => {
+  const rest = fakeRest();
+  const poster = new Poster(rest,null);
+  let calls = 0;
+  rest.failOn = route => route.startsWith('/webhooks/') && ++calls === 2;
+  await poster.say('thread-1','あ'.repeat(2500),{as:'pm'});
+  assert.deepEqual(rest.posts.map(post => [post.route,post.body.content.length]),[['/webhooks/hook-1/secret',1900],['/channels/thread-1/messages',600]]);
 });
 
 test('Discord PNG attachments are downloaded for the intake vision input and cleaned up', async () => {

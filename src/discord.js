@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, ChannelType, escapeMarkdown } from 'discord.js';
+import { Client, GatewayIntentBits, ChannelType } from 'discord.js';
 import { Poster } from './poster.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,8 +11,8 @@ const translationBlock = /\n\n(?=(?:🇯🇵|🇺🇸|🇰🇷) )/u;
 // 翻訳の併記は同じ内容の繰り返しなので、AI に渡す会話から外す
 export function historyLine(message, botId, webhooks = {}) {
   const webhookId = message.webhookId || message.webhook_id || '';
-  if (webhookId && webhookId === webhooks.translation) return '';
-  const own = message.author?.id === botId || Boolean(webhookId && webhookId === webhooks.agent);
+  if (webhookId && webhooks.translation?.has(webhookId)) return '';
+  const own = message.author?.id === botId || Boolean(webhookId && webhooks.agent?.has(webhookId));
   if (message.author?.bot && !own) return '';
   const content = String(message.content || '');
   if (own && content.startsWith('🌐 **')) return '';
@@ -150,7 +150,7 @@ export class DiscordTransport {
     this.translatedMessageIds.add(message.id);
     if (this.translatedMessageIds.size > 1000) this.translatedMessageIds.clear();
     try {
-      const username = escapeMarkdown(message.member?.displayName || message.author.displayName || message.author.username || 'user').slice(0,80);
+      const username = (message.member?.displayName || message.author.displayName || message.author.username || 'user').slice(0,80);
       const avatarURL = message.member?.displayAvatarURL?.({extension:'png',size:256}) || message.author.displayAvatarURL?.({extension:'png',size:256}) || '';
       await this.speaker.relay(threadId,message.content,{username,avatarURL});
     } catch (error) { console.error('translation of user message', error); }
