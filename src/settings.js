@@ -224,3 +224,15 @@ export function clearPromptOverride(store, file) {
   delete overrides[file];
   store.setKv('prompt_overrides', JSON.stringify(overrides));
 }
+
+// AI へ渡すフック一式。人格プロンプトは人格 ID で引く（名前は重複しうるため、名前は予備）
+export function aiHooks(store) {
+  return {
+    personaPrompt: (personaId, name) => {
+      const personas = getPersonas(store);
+      return personas.find(persona => persona.id === personaId)?.prompt
+        || personas.find(persona => persona.name === name)?.prompt || '';
+    },
+    promptOverride: file => getPromptOverride(store, file)
+  };
+}

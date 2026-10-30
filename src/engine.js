@@ -210,7 +210,7 @@ export class Engine {
       if (!ticket || ticket.status !== 'waiting_info') return;
       const answer = await this.discord.userMessage?.(id,ticket.last_message_id) || await this.discord.history(id);
       role = await this.acquireRole('PM',id);
-      const decision = await this.ai.ask(role.name, `出荷検証が2回失敗して停止したPRについて、スレ主から回答がありました。保留・中止の指示なら retry=false。修正または再試行の指示なら retry=true とし、統合担当への具体的な指示を書いてください。返す JSON: {"retry":boolean,"instruction":"統合担当への指示","reason":"判断理由"}。\n\n案件: ${ticket.title}\nPR #${ticket.pr_number}\n失敗: ${ticket.error}\nスレ主の回答: ${answer}`, {provider:this.config.intakeProvider || 'codex',cwd:this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
+      const decision = await this.ai.ask(role.name, `出荷検証が2回失敗して停止したPRについて、スレ主から回答がありました。保留・中止の指示なら retry=false。修正または再試行の指示なら retry=true とし、統合担当への具体的な指示を書いてください。返す JSON: {"retry":boolean,"instruction":"統合担当への指示","reason":"判断理由"}。\n\n案件: ${ticket.title}\nPR #${ticket.pr_number}\n失敗: ${ticket.error}\nスレ主の回答: ${answer}`, {provider:this.config.intakeProvider || 'codex',cwd:this.config.repo,repoReadOnly:true,timeoutMs:2*60_000,roleId:role.id});
       if (decision.retry !== true) {
         await this.post(id, role.id, `出荷を保留します。${trim(decision.reason || '再開する場合は、このスレッドで指示してください。',500)}`);
         return;
@@ -270,7 +270,7 @@ export class Engine {
 ${context ? `前回までの対応: ${context}\n` : ''}${proposal ? `PM の提案（返答待ち）: ${proposal}\n` : ''}${addenda.length ? `追加の発言: ${JSON.stringify(addenda)}\n` : ''}会話:
 ${history}
 
-既存案件: ${JSON.stringify(similar)}`, { provider: this.config.intakeProvider, cwd: snapshot.path, repoReadOnly: true, speaking: true, images: [...(imageBundle?.paths || []),...(parentImageBundle?.paths || [])] });
+既存案件: ${JSON.stringify(similar)}`, { provider: this.config.intakeProvider, cwd: snapshot.path, repoReadOnly: true, speaking: true, roleId: intakeRole.id, images: [...(imageBundle?.paths || []),...(parentImageBundle?.paths || [])] });
       const purpose = trim(result.purpose,500);
       const update = { title: trim(result.title || ticket.title, 100), summary: trim(`${purpose ? `目的: ${purpose}\n` : ''}${result.summary || ''}`, 3000), criteria: JSON.stringify(asList(result.criteria)) };
       this.store.update(id, update);
@@ -339,7 +339,7 @@ ${history}
       snapshot = await this.git.snapshotWorktree(`support-${id}-${Date.now()}`,baseSha);
       const pr = ticket.pr_number ? await this.git.prDetails(ticket.pr_number).catch(() => null) : null;
       const context = await this.roundContext(id);
-      const result = await this.ai.ask(supportRole.name, `完了済みの Discord スレッドへの新しい発言を判断してください。現在の ${this.config.baseBranch || 'develop'} と関連 docs、PR 情報を読みます。実装の質問なら action="answer" として確認できたソースのパスを含む正確な説明を返します。新しい不具合・回帰・追加の改修依頼なら action="new_fix" とします。このスレッドで続けて対応するので、ここまでの会話と前回の対応を前提に、今回の依頼を title と summary にまとめます。再現手順など必要な情報が足りないなら action="clarify" として短く質問します。既に質問済みの内容を繰り返し聞かないでください。コード変更は不要です。返す JSON: {"action":"answer|new_fix|clarify","answer":"回答または確認質問","title":"今回の対応の短い件名","summary":"不具合や要望と期待結果の要約"}。\n\n今回の案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,pr:ticket.pr_number,round:ticket.round || 1})}\nPR情報: ${JSON.stringify(pr)}\n${context ? `前回までの対応: ${context}\n` : ''}最新の発言: ${JSON.stringify(question)}\n会話の文脈: ${history}`, {cwd:snapshot.path,repoReadOnly:true,speaking:true});
+      const result = await this.ai.ask(supportRole.name, `完了済みの Discord スレッドへの新しい発言を判断してください。現在の ${this.config.baseBranch || 'develop'} と関連 docs、PR 情報を読みます。実装の質問なら action="answer" として確認できたソースのパスを含む正確な説明を返します。新しい不具合・回帰・追加の改修依頼なら action="new_fix" とします。このスレッドで続けて対応するので、ここまでの会話と前回の対応を前提に、今回の依頼を title と summary にまとめます。再現手順など必要な情報が足りないなら action="clarify" として短く質問します。既に質問済みの内容を繰り返し聞かないでください。コード変更は不要です。返す JSON: {"action":"answer|new_fix|clarify","answer":"回答または確認質問","title":"今回の対応の短い件名","summary":"不具合や要望と期待結果の要約"}。\n\n今回の案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,pr:ticket.pr_number,round:ticket.round || 1})}\nPR情報: ${JSON.stringify(pr)}\n${context ? `前回までの対応: ${context}\n` : ''}最新の発言: ${JSON.stringify(question)}\n会話の文脈: ${history}`, {cwd:snapshot.path,repoReadOnly:true,speaking:true,roleId:supportRole.id});
       if (result.action === 'new_fix') {
         const previousPr = ticket.pr_number;
         this.startRound(id,messageId,result);
@@ -384,7 +384,7 @@ ${history}
       if (!text) return;
       role = await this.acquireRole('PM',id);
       const reason = this.store.getKv(`decline:${id}`) || '';
-      const result = await this.ai.ask(role.name, `見送った案件のスレッドに新しい発言がありました。見送りへの異議・再検討の依頼なら action="appeal"、見送り理由を受けて別の形の依頼に変えたものなら action="revise"、了承やお礼など対応が要らないなら action="none" にします。返す JSON: {"action":"appeal|revise|none","reply":"ユーザーへの短い返信"}。\n\n案件: ${ticket.title}\n見送り理由: ${reason}\n新しい発言: ${JSON.stringify(text)}`, {provider:this.config.intakeProvider || 'codex',cwd:this.config.repo,repoReadOnly:true,timeoutMs:2*60_000,speaking:true});
+      const result = await this.ai.ask(role.name, `見送った案件のスレッドに新しい発言がありました。見送りへの異議・再検討の依頼なら action="appeal"、見送り理由を受けて別の形の依頼に変えたものなら action="revise"、了承やお礼など対応が要らないなら action="none" にします。返す JSON: {"action":"appeal|revise|none","reply":"ユーザーへの短い返信"}。\n\n案件: ${ticket.title}\n見送り理由: ${reason}\n新しい発言: ${JSON.stringify(text)}`, {provider:this.config.intakeProvider || 'codex',cwd:this.config.repo,repoReadOnly:true,timeoutMs:2*60_000,speaking:true,roleId:role.id});
       this.store.update(id,{answered_message_id:messageId});
       if (result.action === 'revise') {
         this.store.update(id,{status:'intake'});
@@ -425,7 +425,7 @@ ${history}
 返す JSON: {"verdict":"implement|propose|decline|decision","duplicateOf":"既存IDまたは空文字","purpose":"推定した目的","reason":"判断理由","proposal":"提案または代案","decisionQuestion":"判断すべき内容と選択肢","title":"短い件名","summary":"背景と期待結果","criteria":["観測可能な受け入れ条件"],"implementationTask":"実装担当への具体的な指示"}。
 
 現案件: ${JSON.stringify(input)}
-既存案件: ${JSON.stringify(candidates)}`, {cwd,repoReadOnly:true,speaking:true});
+既存案件: ${JSON.stringify(candidates)}`, {cwd,repoReadOnly:true,speaking:true,roleId:'pm'});
   }
   async plan(id, history, decisionAnswer = '', { cwd = '', proposal = '', appeal = false } = {}) {
     let snapshot;
@@ -480,7 +480,7 @@ ${history}
     this.store.setKv(`proposal:${id}`,'');
     const leadRole = await this.acquireRole('開発リード',id);
     let lead;
-    try { lead = await this.ai.ask(leadRole.name, `開発リードとして、PM の方針を実装担当への作業指示に落とします。作業コピーのコードを読み、関連する既存の仕組み、変更するファイル、壊しやすい既存機能を確認してください。受け入れ条件を満たすためだけの特別扱いやハードコードは指示しません。製品判断の不足があれば needsDecision=true。返す JSON: {"needsDecision": boolean, "decisionQuestion": "不足している判断", "task": "実装担当への明確な作業指示（目的、方針、変更箇所、確認方法）", "risk": "主な注意点"}。\n\n案件: ${JSON.stringify({title:result.title,purpose,summary,criteria,implementationTask:result.implementationTask,decisionAnswer})}`, {cwd,repoReadOnly:true});
+    try { lead = await this.ai.ask(leadRole.name, `開発リードとして、PM の方針を実装担当への作業指示に落とします。作業コピーのコードを読み、関連する既存の仕組み、変更するファイル、壊しやすい既存機能を確認してください。受け入れ条件を満たすためだけの特別扱いやハードコードは指示しません。製品判断の不足があれば needsDecision=true。返す JSON: {"needsDecision": boolean, "decisionQuestion": "不足している判断", "task": "実装担当への明確な作業指示（目的、方針、変更箇所、確認方法）", "risk": "主な注意点"}。\n\n案件: ${JSON.stringify({title:result.title,purpose,summary,criteria,implementationTask:result.implementationTask,decisionAnswer})}`, {cwd,repoReadOnly:true,roleId:leadRole.id});
     } finally { this.releaseRole(leadRole); }
     if (lead.needsDecision) {
       await this.askDecision(id, trim(lead.decisionQuestion || '開発方針を確認してください'));
@@ -577,7 +577,7 @@ ${history}
       const diff = await this.git.reviewDiff(path);
       if (!diff.trim()) return null;
       role = await this.acquireRole('開発リード',id);
-      return await this.ai.ask(role.name, `実装担当の差分を、案件の目的・開発方針・判断基準に照らして確認してください。受け入れ条件を満たすためだけの特別扱いやハードコード、既存の仕組みと重複する新しい仕組み、目的に関係ない変更、判断基準の「断る」に当たる変更、変更履歴（changelog/・shared/changelog.ts）の編集を探します。返す JSON: {"approve":boolean,"guardrailViolation":boolean,"issues":["実装担当が直すべき点"],"summary":"短い所見"}。\n\n案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,criteria:JSON.parse(ticket.criteria || '[]')})}\n作業指示:\n${trim(task,6000)}\n\n差分:\n${diff}`, {guide:'review',cwd:path,repoReadOnly:true,timeoutMs:5*60_000});
+      return await this.ai.ask(role.name, `実装担当の差分を、案件の目的・開発方針・判断基準に照らして確認してください。受け入れ条件を満たすためだけの特別扱いやハードコード、既存の仕組みと重複する新しい仕組み、目的に関係ない変更、判断基準の「断る」に当たる変更、変更履歴（changelog/・shared/changelog.ts）の編集を探します。返す JSON: {"approve":boolean,"guardrailViolation":boolean,"issues":["実装担当が直すべき点"],"summary":"短い所見"}。\n\n案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,criteria:JSON.parse(ticket.criteria || '[]')})}\n作業指示:\n${trim(task,6000)}\n\n差分:\n${diff}`, {guide:'review',cwd:path,repoReadOnly:true,timeoutMs:5*60_000,roleId:role.id});
     } catch (error) {
       this.event(id,role?.id || 'lead','review_warning',trim(error.message,300));
       return null;
@@ -611,12 +611,12 @@ ${history}
         await this.git.pushWithRetry(worktree.path,worktree.branch,(attempt,error) => this.event(id,'pm','push_retry',`GitHub push 再試行 ${attempt}: ${trim(error.message,300)}`));
       } else {
         let used = this.addenda(id).length;
-        let report = await this.ai.code(worker.name, `${worktree.resumed ? '前回の未完了の差分が作業ツリーにあります。最初に git status と差分を読み、既存の変更を引き継いで完成させてください。\n\n' : ''}${task}`, worktree.path);
+        let report = await this.ai.code(worker.name, `${worktree.resumed ? '前回の未完了の差分が作業ツリーにあります。最初に git status と差分を読み、既存の変更を引き継いで完成させてください。\n\n' : ''}${task}`, worktree.path, { roleId: worker.id });
         for (let pass = 0; pass < 2 && !/NEEDS_CLARIFICATION/i.test(report) && this.addenda(id).length > used; pass++) {
           const added = this.addenda(id).slice(used);
           used += added.length;
           this.event(id,worker.id,'addendum_applied',`実装中に届いた発言 ${added.length} 件を反映`);
-          report = await this.ai.code(worker.name, `実装中にスレッドで次の発言が届きました。作業ツリーの差分を引き継ぎ、目的に照らして取り込んでください。矛盾する場合は NEEDS_CLARIFICATION で質問してください。\n\n${added.map(x => `- ${x}`).join('\n')}\n\n元の依頼:\n${task}`, worktree.path);
+          report = await this.ai.code(worker.name, `実装中にスレッドで次の発言が届きました。作業ツリーの差分を引き継ぎ、目的に照らして取り込んでください。矛盾する場合は NEEDS_CLARIFICATION で質問してください。\n\n${added.map(x => `- ${x}`).join('\n')}\n\n元の依頼:\n${task}`, worktree.path, { roleId: worker.id });
         }
         if (/NEEDS_CLARIFICATION/i.test(report)) {
           this.store.update(id, { status: 'waiting_info', worker: null });
@@ -633,7 +633,7 @@ ${history}
         }
         if (review && review.approve !== true && asList(review.issues).length) {
           this.event(id,'lead','review_changes',trim(asList(review.issues).join(' / '),500));
-          report = await this.ai.code(worker.name, `開発リードの設計レビューで次の指摘がありました。作業ツリーの差分を引き継いで直してください。\n\n${asList(review.issues).map(x => `- ${x}`).join('\n')}\n\n元の依頼:\n${task}`, worktree.path);
+          report = await this.ai.code(worker.name, `開発リードの設計レビューで次の指摘がありました。作業ツリーの差分を引き継いで直してください。\n\n${asList(review.issues).map(x => `- ${x}`).join('\n')}\n\n元の依頼:\n${task}`, worktree.path, { roleId: worker.id });
           reviewNote = asList(review.issues).map(x => `- ${x}`).join('\n');
         }
         this.store.setKv(`user-changes:${id}`,JSON.stringify(userFacingChanges(report)));
@@ -678,7 +678,7 @@ ${history}
     const role = await this.acquireRole('PM',id);
     let decision;
     try {
-      decision = await this.ai.ask(role.name, `実装案件で失敗が起きました。作業ツリーの状態とエラーを確認し、同じ作業を再試行する価値があるか判断してください。GitHub への一時的な push 失敗なら再試行を選びます。コードやテストの失敗なら、修正の具体的な指示を付けます。認証・権限など人の操作が必要なら停止します。返す JSON: {"retry":boolean,"reason":"判断理由","instruction":"実装担当への修正指示"}。\n\n案件: ${this.store.get(id)?.title}\n段階: ${stage}\n失敗: ${trim(error.message,1500)}`, {provider:this.config.intakeProvider || 'codex',cwd:worktree.path,repoReadOnly:true,timeoutMs:2*60_000});
+      decision = await this.ai.ask(role.name, `実装案件で失敗が起きました。作業ツリーの状態とエラーを確認し、同じ作業を再試行する価値があるか判断してください。GitHub への一時的な push 失敗なら再試行を選びます。コードやテストの失敗なら、修正の具体的な指示を付けます。認証・権限など人の操作が必要なら停止します。返す JSON: {"retry":boolean,"reason":"判断理由","instruction":"実装担当への修正指示"}。\n\n案件: ${this.store.get(id)?.title}\n段階: ${stage}\n失敗: ${trim(error.message,1500)}`, {provider:this.config.intakeProvider || 'codex',cwd:worktree.path,repoReadOnly:true,timeoutMs:2*60_000,roleId:role.id});
     } catch (reviewError) {
       this.event(id,role.id,'retry_review_warning',trim(reviewError.message,300));
       decision = {retry:stage === 'publish',reason:'GitHub への送信を再試行します',instruction:''};
@@ -708,7 +708,7 @@ ${history}
     try {
       role = await this.acquireRole('PM',id);
       const worktree = await this.git.resumeTaskWorktree(id).catch(() => null);
-      const decision = await this.ai.ask(role.name, `停止した開発案件を確認してください。残っている作業ツリーの差分とエラーを読み、再試行で修復できるなら retry=true にして具体的な修正指示を書いてください。新しい ${this.config.baseBranch || 'develop'} が進んだことによる履歴や競合の失敗なら、元の変更を保持したまま統合するよう指示します。認証や製品判断など人の対応が必要なら retry=false にしてください。返す JSON: {"retry":boolean,"reason":"判断理由","instruction":"実装担当への修正指示"}。\n\n案件: ${ticket.title}\n失敗: ${trim(ticket.error,1500)}\n再検討: ${count}/3`, {provider:this.config.intakeProvider || 'codex',cwd:worktree?.path || this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
+      const decision = await this.ai.ask(role.name, `停止した開発案件を確認してください。残っている作業ツリーの差分とエラーを読み、再試行で修復できるなら retry=true にして具体的な修正指示を書いてください。新しい ${this.config.baseBranch || 'develop'} が進んだことによる履歴や競合の失敗なら、元の変更を保持したまま統合するよう指示します。認証や製品判断など人の対応が必要なら retry=false にしてください。返す JSON: {"retry":boolean,"reason":"判断理由","instruction":"実装担当への修正指示"}。\n\n案件: ${ticket.title}\n失敗: ${trim(ticket.error,1500)}\n再検討: ${count}/3`, {provider:this.config.intakeProvider || 'codex',cwd:worktree?.path || this.config.repo,repoReadOnly:true,timeoutMs:2*60_000,roleId:role.id});
       if (decision.retry !== true) {
         this.store.setKv(countKey,3);
         this.event(id,role.id,'needs_attention',trim(decision.reason || '人の確認が必要です',500));
@@ -741,7 +741,7 @@ ${history}
       const prompt = stage === 'release'
         ? `同じPRの出荷検証がPMによる修正後も失敗しました。自動再試行を止めました。CIエラーとPRの状態から、スレ主に修正・再開か保留かを選んでもらう具体的な質問を一つ作ってください。技術的な原因を短く説明します。返す JSON: {"question":"ユーザーへの質問"}。\n\n案件: ${this.store.get(id)?.title}\nPR #${this.store.get(id)?.pr_number}\n失敗: ${message}`
         : `同じ案件が2回失敗しました。自動再試行は止めます。残っている作業ツリーと失敗内容を調べ、ユーザーが次の方針を指示できる具体的な質問を一つ作ってください。技術的な原因は短く説明し、実装の詳細が分からない人にも選べる案を添えます。返す JSON: {"question":"ユーザーへの質問"}。\n\n案件: ${this.store.get(id)?.title}\n失敗: ${message}`;
-      const result = await this.ai.ask(role.name,prompt,{provider:this.config.intakeProvider || 'codex',cwd:worktree?.path || this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
+      const result = await this.ai.ask(role.name,prompt,{provider:this.config.intakeProvider || 'codex',cwd:worktree?.path || this.config.repo,repoReadOnly:true,timeoutMs:2*60_000,roleId:role.id});
       question = trim(result.question || question,1000);
     } catch (reviewError) {
       this.event(id,role?.id || 'pm','retry_review_warning',trim(reviewError.message,500));
@@ -760,7 +760,7 @@ ${history}
     try {
       role = await this.acquireRole('PM',id);
       const details = await this.git.failedCheckDetails?.(ticket.pr_number).catch(() => '') || '';
-      const decision = await this.ai.ask(role.name, `出荷段階で同じPRが2回以上失敗しています。CIログとエラーと作業ツリーのコードを調べ、統合担当が修正できるなら retry=true とし、具体的な修正指示を書いてください。変更なしの再実行だけは指示しないでください。製品判断や認証など人の判断が必要なら retry=false にしてください。返す JSON: {"retry":boolean,"instruction":"統合担当への修正指示","reason":"判断理由"}。\n\n案件: ${ticket.title}\nPR #${ticket.pr_number}\nエラー: ${trim(error.message,2000)}\nCIログ: ${trim(details,10000)}\nPMによる修正指示: ${repairs}/2`, {provider:this.config.intakeProvider || 'codex',cwd:worktreePath || this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
+      const decision = await this.ai.ask(role.name, `出荷段階で同じPRが2回以上失敗しています。CIログとエラーと作業ツリーのコードを調べ、統合担当が修正できるなら retry=true とし、具体的な修正指示を書いてください。変更なしの再実行だけは指示しないでください。製品判断や認証など人の判断が必要なら retry=false にしてください。返す JSON: {"retry":boolean,"instruction":"統合担当への修正指示","reason":"判断理由"}。\n\n案件: ${ticket.title}\nPR #${ticket.pr_number}\nエラー: ${trim(error.message,2000)}\nCIログ: ${trim(details,10000)}\nPMによる修正指示: ${repairs}/2`, {provider:this.config.intakeProvider || 'codex',cwd:worktreePath || this.config.repo,repoReadOnly:true,timeoutMs:2*60_000,roleId:role.id});
       if (decision.retry === true && String(decision.instruction || '').trim()) {
         this.store.setKv(`release-pm-repairs:${id}`,repairs + 1);
         this.store.setKv(`release-instruction:${id}`,trim(decision.instruction,1500));
@@ -790,7 +790,7 @@ ${history}
     try {
       let notes = '';
       try {
-        const review = await this.ai.ask(roleName('release'), `出荷担当として、出荷待ちの PR の依存関係と注意点を確認してください。各 PR は個別に検証し、通るものを順にマージします。返す JSON: {"notes":"短いマージ説明"}。\n\n候補: ${JSON.stringify(ready.map(x => ({id:x.id,title:x.title,summary:x.summary,pr:x.pr_number})))}`);
+        const review = await this.ai.ask(roleName('release'), `出荷担当として、出荷待ちの PR の依存関係と注意点を確認してください。各 PR は個別に検証し、通るものを順にマージします。返す JSON: {"notes":"短いマージ説明"}。\n\n候補: ${JSON.stringify(ready.map(x => ({id:x.id,title:x.title,summary:x.summary,pr:x.pr_number})))}`, { roleId: 'release' });
         notes = trim(review.notes,300);
       } catch (error) { this.event(null,'release','selection_warning',`出荷前レビュー失敗。PR の個別検証を続行: ${trim(error.message,300)}`); }
       this.store.updateRelease(releaseId, { tickets: JSON.stringify(ready.map(x => x.id)) });
@@ -818,7 +818,7 @@ ${history}
             const conflicts = (await this.git.git(['diff','--name-only','--diff-filter=U'],worktree.path)).stdout;
             if (!conflicts) throw mergeError;
             this.event(ticket.id,'integrator','conflict',`競合解決中: ${trim(conflicts, 300)}`);
-            const report = await this.ai.code(roleName('integrator'), `現在 Git merge 中の競合を解決してください。競合マーカーを除去し、両方の変更を満たしてください。git add/commit/push は行わないでください。対象: ${ticket.title}。`, worktree.path, { provider: this.config.integrationProvider, reportChanges:false });
+            const report = await this.ai.code(roleName('integrator'), `現在 Git merge 中の競合を解決してください。競合マーカーを除去し、両方の変更を満たしてください。git add/commit/push は行わないでください。対象: ${ticket.title}。`, worktree.path, { provider: this.config.integrationProvider, reportChanges:false ,roleId:'integrator'});
             await this.git.git(['add','-A'],worktree.path);
             await this.git.git(['commit','--no-edit'],worktree.path);
             this.event(ticket.id,'integrator','resolved',trim(report,300));
@@ -887,7 +887,7 @@ ${history}
         if (attempt === 2) throw error;
         this.event(ticket.id,'pm','repair_requested',`統合後の検証失敗を修正 (${attempt + 1}/2): ${trim(error.message,400)}`);
         const instruction = this.store.getKv(`release-instruction:${ticket.id}`);
-        const report = await this.ai.code(roleName('integrator'), `最新 ${this.config.baseBranch || 'develop'} と PR の統合後、検証に失敗しました。現在の作業ツリーの差分を保持し、次のエラーを修正してください。git add/commit/push は行わないでください。案件: ${ticket.title}。${instruction ? `スレ主の指示: ${trim(instruction,1500)}。` : ''}エラー: ${trim(error.message,1500)}`, path, {provider:this.config.integrationProvider,reportChanges:false,timeoutMs:15*60_000});
+        const report = await this.ai.code(roleName('integrator'), `最新 ${this.config.baseBranch || 'develop'} と PR の統合後、検証に失敗しました。現在の作業ツリーの差分を保持し、次のエラーを修正してください。git add/commit/push は行わないでください。案件: ${ticket.title}。${instruction ? `スレ主の指示: ${trim(instruction,1500)}。` : ''}エラー: ${trim(error.message,1500)}`, path, {provider:this.config.integrationProvider,reportChanges:false,timeoutMs:15*60_000,roleId:'integrator'});
         const status = await this.git.git(['status','--porcelain'],path);
         if (!status.stdout) throw new Error('Integrator made no changes to repair the failed check');
         this.event(ticket.id,'integrator','repair_applied',trim(report,300));

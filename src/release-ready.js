@@ -9,7 +9,8 @@ import { Translator } from './translation.js';
 import { Engine } from './engine.js';
 import { syncThreadStatus } from './thread-status.js';
 import { acquireLock } from './lock.js';
-import { Poster } from './poster.js';
+import { Poster, setAvatarBaseUrl } from './poster.js';
+import { applySettings, aiHooks } from './settings.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const config = getConfig();
@@ -20,7 +21,9 @@ if (!lock) {
   store.close();
   process.exit(0);
 }
-const ai = new AI(config);
+applySettings(store, config);
+setAvatarBaseUrl(`${config.adminPublicUrl || 'https://tonarium-agent.kokopi.me'}/avatars`);
+const ai = new AI(config, root, aiHooks(store));
 const git = new GitHub(config,root);
 const translator = new Translator(config,ai,root);
 const rest = new REST({version:'10'}).setToken(config.discordToken);
