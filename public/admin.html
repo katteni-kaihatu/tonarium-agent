@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0c1725" />
+  <title>TONARIUM — 管理画面</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .admin-shell{max-width:1100px;margin:0 auto;padding:0 24px 60px}
+    .admin-head{display:flex;align-items:center;justify-content:space-between;padding:28px 0 10px;border-bottom:1px solid #ffffff19}
+    .admin-head h1{font:900 24px 'Zen Maru Gothic',sans-serif;margin:0}
+    .admin-card{background:linear-gradient(155deg,#192f43,#112336);border:1px solid #345066;border-radius:13px;padding:22px;margin-top:22px}
+    .admin-card h2{font:900 19px 'Zen Maru Gothic',sans-serif;margin:0 0 6px}
+    .admin-card h3{font-size:14px;margin:18px 0 8px}
+    .admin-card p.note{color:var(--muted);font-size:12px;margin:0 0 12px}
+    .admin-card label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+    .admin-card input[type=text],.admin-card textarea,.admin-card select{background:#0c1725;color:var(--ink);border:1px solid #345066;border-radius:7px;padding:9px 11px;font:inherit;font-size:13px;width:100%}
+    .admin-card textarea{min-height:110px;line-height:1.6}
+    .admin-card textarea.tall{min-height:260px;font-family:'IBM Plex Mono',monospace;font-size:12px}
+    .btn{background:var(--mint);color:#0d2530;border:0;border-radius:7px;padding:9px 16px;font:700 12px 'Noto Sans JP',sans-serif;cursor:pointer}
+    .btn.sub{background:#1a3145;color:var(--ink);border:1px solid #355066}
+    .btn.danger{background:#49303a;color:#f1a6b2;border:1px solid #7a4453}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .row{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
+    .row>*{flex:0 1 auto}
+    .grow{flex:1 1 200px!important}
+    .checks{display:flex;gap:16px;flex-wrap:wrap;margin:8px 0}
+    .checks label{display:flex;gap:6px;align-items:center;color:var(--ink);font-size:13px;margin:0}
+    table.admin-table{width:100%;border-collapse:collapse;font-size:12px}
+    table.admin-table th,table.admin-table td{border-bottom:1px solid #274154;padding:9px 6px;text-align:left;vertical-align:top}
+    .badge{display:inline-block;font:600 10px 'IBM Plex Mono',monospace;color:var(--gold);border:1px solid #a48246;border-radius:99px;padding:2px 8px;margin-left:8px}
+    .persona{display:grid;grid-template-columns:64px 1fr;gap:14px;border-top:1px solid #274154;padding:16px 0}
+    .persona img{width:64px;height:64px;border-radius:13px;border:1px solid #345066;background:#0c1725;object-fit:cover}
+    .member-job{border-top:1px solid #274154;padding:14px 0}
+    .member-job-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+    .member-job-head strong{font-size:14px}
+    .count-ctl{display:flex;align-items:center;gap:8px}
+    .count-ctl button{width:30px;height:30px;border-radius:7px;background:#1a3145;color:var(--ink);border:1px solid #355066;cursor:pointer;font-size:15px}
+    .count-ctl button:disabled{opacity:.4;cursor:not-allowed}
+    .member-line{display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap}
+    .member-line code{color:var(--mint);font-size:12px;min-width:90px}
+    .member-line select{flex:1 1 220px}
+    .msg{font-size:12px;color:var(--mint);min-height:18px;margin-top:8px}
+    .msg.err{color:#f1a6b2}
+    .login-box{text-align:center;padding:60px 20px}
+    .login-box p{color:var(--muted)}
+    [hidden]{display:none!important}
+  </style>
+</head>
+<body>
+  <div class="admin-shell">
+    <header class="admin-head">
+      <h1>管理画面</h1>
+      <a href="/">← ダッシュボードへ</a>
+    </header>
+
+    <section id="login-view" class="admin-card login-box" hidden>
+      <h2>ログインが必要です</h2>
+      <p>管理画面は Misskey（misskey.resonite.love）のアカウントで認証します。</p>
+      <p><a class="btn" href="/admin/login" style="display:inline-block;text-decoration:none">Misskey でログイン</a></p>
+    </section>
+
+    <div id="main-view" hidden>
+      <section class="admin-card">
+        <h2>ログイン中</h2>
+        <p class="note" id="me-line"></p>
+        <p class="note" id="me-perms"></p>
+        <button class="btn sub" id="logout">ログアウト</button>
+        <div class="msg" id="msg-top"></div>
+      </section>
+
+      <section class="admin-card" id="sec-admin" hidden>
+        <h2>管理者とベース権限</h2>
+        <h3>ベース権限</h3>
+        <p class="note">Misskey アカウントさえあれば誰でも持つ権限です。管理権限はベースには設定できません。</p>
+        <div class="checks" id="base-checks"></div>
+        <button class="btn" id="base-save">ベース権限を保存</button>
+        <h3>管理者</h3>
+        <table class="admin-table"><thead><tr><th>Misskey ID</th><th>ユーザー</th><th>権限</th><th></th></tr></thead><tbody id="admins-body"></tbody></table>
+        <h3>管理者を追加</h3>
+        <div class="row">
+          <div class="grow"><label>Misskey ID</label><input type="text" id="new-admin-id" placeholder="Misskey で確認できる ID" /></div>
+          <div class="grow"><label>ユーザー名（任意）</label><input type="text" id="new-admin-name" /></div>
+        </div>
+        <div class="checks" id="new-admin-checks"></div>
+        <button class="btn" id="admin-add">追加</button>
+        <div class="msg" id="msg-admin"></div>
+      </section>
+
+      <section class="admin-card" id="sec-personas" hidden>
+        <h2>キャラ人格</h2>
+        <p class="note">名前・アイコン・人格プロンプトの定義です。人格プロンプトは Discord で話すときにだけ使われます。どのメンバーに割り当てるかは「メンバー管理」で決めます。</p>
+        <div id="persona-list"></div>
+        <h3>人格を追加</h3>
+        <label>名前</label><input type="text" id="new-persona-name" />
+        <label>人格プロンプト</label><textarea id="new-persona-prompt"></textarea>
+        <p style="margin-top:10px"><button class="btn" id="persona-add">追加</button></p>
+        <div class="msg" id="msg-persona"></div>
+      </section>
+
+      <section class="admin-card" id="sec-members" hidden>
+        <h2>メンバー管理</h2>
+        <p class="note">仕事ごとの枠です。仕事の内容は固定で、変えられるのは人数（可変の仕事のみ）と人格の割り当てだけです。</p>
+        <div id="member-list"></div>
+        <div class="msg" id="msg-member"></div>
+      </section>
+
+      <section class="admin-card" id="sec-prompts" hidden>
+        <h2>プロンプト</h2>
+        <p class="note">仕事共通の指示です。保存するとファイルより優先される上書きとして使われます。「ファイルに戻す」で上書きを解除できます。</p>
+        <label>ファイル</label>
+        <select id="prompt-file"></select>
+        <p class="note" id="prompt-source"></p>
+        <textarea class="tall" id="prompt-content"></textarea>
+        <p style="margin-top:10px">
+          <button class="btn" id="prompt-save">上書きを保存</button>
+          <button class="btn sub" id="prompt-reset">ファイルに戻す</button>
+        </p>
+        <div class="msg" id="msg-prompt"></div>
+      </section>
+
+      <section class="admin-card" id="sec-decision" hidden>
+        <h2>変更判断の Discord ユーザー</h2>
+        <p class="note">見送りへの異議や判断基準に当たる変更は、ここに登録したユーザーの回答だけで決まります（複数可）。</p>
+        <div id="decision-list"></div>
+        <div class="row" style="margin-top:12px">
+          <div class="grow"><label>Discord ユーザー ID（17〜20桁）</label><input type="text" id="new-decision-id" /></div>
+          <button class="btn" id="decision-add">追加</button>
+        </div>
+        <div class="msg" id="msg-decision"></div>
+      </section>
+    </div>
+  </div>
+  <script type="module" src="/admin.js"></script>
+</body>
+</html>

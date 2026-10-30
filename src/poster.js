@@ -3,14 +3,19 @@ import { roles } from './config.js';
 import { translationLines, withTranslations } from './translation.js';
 
 export const webhookNames = { agent:'Tonarium Agent', translation:'Tonarium Agent 通訳' };
-// リポジトリは公開なので、Discord が取得できる GitHub の配信 URL を使う
-export const avatarBaseUrl = 'https://raw.githubusercontent.com/katteni-kaihatu/tonarium-agent/main/public/avatars';
+// アイコンは管理画面で差し替えられるよう、ダッシュボード自身が /avatars/ で配信する。
+// Discord は Webhook の avatar_url を投稿ごとに取得するので、push なしで反映される
+export let avatarBaseUrl = 'https://tonarium-agent.kokopi.me/avatars';
+export function setAvatarBaseUrl(url) {
+  if (url) avatarBaseUrl = String(url).replace(/\/+$/,'');
+  return avatarBaseUrl;
+}
 const threadTypes = new Set([10,11,12]);
 const retryAfterMs = 10 * 60_000;
 
 export function roleIdentity(id) {
   const role = roles.find(entry => entry.id === id);
-  return role ? { username:`${role.name}｜${role.job}`, avatarURL:`${avatarBaseUrl}/${role.id}.png` } : null;
+  return role ? { username:`${role.name}｜${role.job}`, avatarURL:`${avatarBaseUrl}/${role.avatarId || role.id}.png` } : null;
 }
 
 export function chunk(text, limit = 1900) {

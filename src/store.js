@@ -24,6 +24,15 @@ export class Store {
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS admin_users (
+        misskey_id TEXT PRIMARY KEY, username TEXT, display_name TEXT,
+        permissions TEXT NOT NULL DEFAULT '[]', created_by TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS admin_sessions (
+        token_hash TEXT PRIMARY KEY, misskey_id TEXT NOT NULL,
+        expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS ticket_rounds (
         ticket_id TEXT NOT NULL, round INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '',
         criteria TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL, issue_number INTEGER, pr_number INTEGER, branch TEXT,
@@ -37,7 +46,8 @@ export class Store {
     }
   }
   get(id) { return this.db.prepare('SELECT * FROM tickets WHERE id=?').get(id); }
-  list() { return this.db.prepare('SELECT * FROM tickets ORDER BY updated_at DESC LIMIT 200').all(); }
+  // 同じミリ秒に更新された行同士は rowid の降順で安定させる（新しい案件が先に来る）
+  list() { return this.db.prepare('SELECT * FROM tickets ORDER BY updated_at DESC, rowid DESC LIMIT 200').all(); }
   byStatus(statuses) {
     if (!statuses.length) return [];
     return this.db.prepare(`SELECT * FROM tickets WHERE status IN (${statuses.map(() => '?').join(',')}) ORDER BY updated_at ASC`).all(...statuses);
@@ -88,6 +98,36 @@ export class Store {
   releases() { return this.db.prepare('SELECT * FROM releases ORDER BY id DESC LIMIT 20').all(); }
   getKv(key) { return this.db.prepare('SELECT value FROM kv WHERE key=?').get(key)?.value; }
   setKv(key,value) { this.db.prepare('INSERT INTO kv (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,String(value)); }
+  deleteKv(key) { this.db.prepare('DELETE FROM kv WHERE key=?').run(key); }
+  listAdmins() { return this.db.prepare('SELECT * FROM admin_users ORDER BY created_at ASC').all(); }
+  getAdmin(id) { return this.db.prepare('SELECT * FROM admin_users WHERE misskey_id=?').get(id); }
+  upsertAdmin({ misskeyId, username = null, displayName = null, permissions, createdBy = null }) {
+    const now = Date.now();
+    const existing = this.getAdmin(misskeyId);
+    if (existing) {
+      // プロフィールは新しい値が来たときだけ更新し、権限は明示指定があるときだけ差し替える
+      this.db.prepare('UPDATE admin_users SET username=?,display_name=?,permissions=?,updated_at=? WHERE misskey_id=?')
+        .run(username ?? existing.username, displayName ?? existing.display_name,
+          permissions !== undefined ? JSON.stringify(permissions) : existing.permissions, now, misskeyId);
+    } else {
+      this.db.prepare('INSERT INTO admin_users (misskey_id,username,display_name,permissions,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?)')
+        .run(misskeyId, username, displayName, JSON.stringify(permissions ?? []), createdBy, now, now);
+    }
+    return this.getAdmin(misskeyId);
+  }
+  deleteAdmin(id) { this.db.prepare('DELETE FROM admin_users WHERE misskey_id=?').run(id); }
+  createAdminSession(tokenHash, misskeyId, expiresAt) {
+    this.db.prepare('INSERT INTO admin_sessions (token_hash,misskey_id,expires_at,created_at) VALUES (?,?,?,?)')
+      .run(tokenHash, misskeyId, expiresAt, Date.now());
+  }
+  adminSession(tokenHash) {
+    if (!tokenHash) return undefined;
+    const row = this.db.prepare('SELECT s.token_hash,s.misskey_id,s.expires_at,u.username,u.display_name,u.permissions FROM admin_sessions s LEFT JOIN admin_users u ON u.misskey_id=s.misskey_id WHERE s.token_hash=?').get(tokenHash);
+    if (!row) return undefined;
+    if (row.expires_at <= Date.now()) { this.deleteAdminSession(tokenHash); return undefined; }
+    return row;
+  }
+  deleteAdminSession(tokenHash) { this.db.prepare('DELETE FROM admin_sessions WHERE token_hash=?').run(tokenHash); }
   recover() {
     this.db.exec("UPDATE tickets SET status='intake',worker=NULL WHERE status='planning'");
     this.db.exec("UPDATE tickets SET status='queued',worker=NULL WHERE status='coding'");

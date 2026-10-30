@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { SnowflakeUtil } from 'discord.js';
 import { userFacingChanges } from './ai.js';
+import { decisionUserIds, isDecisionUser } from './settings.js';
 
 const roleName = id => roles.find(role => role.id === id)?.name || id;
 const asList = value => Array.isArray(value) ? value.map(String).filter(Boolean) : [];
@@ -196,7 +197,7 @@ export class Engine {
     if (!this.acknowledge(id)) return;
     const author = this.store.getKv(`last-author:${id}`) || '';
     const text = await this.latestUserText(id);
-    if (!this.restrictedDecision(id) || author === this.config.decisionMentionId) return this.decision(id,text,author,id);
+    if (!this.restrictedDecision(id) || isDecisionUser(this.store,this.config,author)) return this.decision(id,text,author,id);
     const url = ticket.decision_thread_id ? await this.discord.url?.(ticket.decision_thread_id).catch(() => '') : '';
     await this.post(id, 'pm', `この判断は決定者に確認しています。回答が出たらこのスレッドでお知らせします。${url ? `\n判断用の投稿: ${url}` : ''}`);
   }
@@ -269,7 +270,7 @@ export class Engine {
 ${context ? `前回までの対応: ${context}\n` : ''}${proposal ? `PM の提案（返答待ち）: ${proposal}\n` : ''}${addenda.length ? `追加の発言: ${JSON.stringify(addenda)}\n` : ''}会話:
 ${history}
 
-既存案件: ${JSON.stringify(similar)}`, { provider: this.config.intakeProvider, cwd: snapshot.path, repoReadOnly: true, images: [...(imageBundle?.paths || []),...(parentImageBundle?.paths || [])] });
+既存案件: ${JSON.stringify(similar)}`, { provider: this.config.intakeProvider, cwd: snapshot.path, repoReadOnly: true, speaking: true, images: [...(imageBundle?.paths || []),...(parentImageBundle?.paths || [])] });
       const purpose = trim(result.purpose,500);
       const update = { title: trim(result.title || ticket.title, 100), summary: trim(`${purpose ? `目的: ${purpose}\n` : ''}${result.summary || ''}`, 3000), criteria: JSON.stringify(asList(result.criteria)) };
       this.store.update(id, update);
@@ -338,7 +339,7 @@ ${history}
       snapshot = await this.git.snapshotWorktree(`support-${id}-${Date.now()}`,baseSha);
       const pr = ticket.pr_number ? await this.git.prDetails(ticket.pr_number).catch(() => null) : null;
       const context = await this.roundContext(id);
-      const result = await this.ai.ask(supportRole.name, `完了済みの Discord スレッドへの新しい発言を判断してください。現在の ${this.config.baseBranch || 'develop'} と関連 docs、PR 情報を読みます。実装の質問なら action="answer" として確認できたソースのパスを含む正確な説明を返します。新しい不具合・回帰・追加の改修依頼なら action="new_fix" とします。このスレッドで続けて対応するので、ここまでの会話と前回の対応を前提に、今回の依頼を title と summary にまとめます。再現手順など必要な情報が足りないなら action="clarify" として短く質問します。既に質問済みの内容を繰り返し聞かないでください。コード変更は不要です。返す JSON: {"action":"answer|new_fix|clarify","answer":"回答または確認質問","title":"今回の対応の短い件名","summary":"不具合や要望と期待結果の要約"}。\n\n今回の案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,pr:ticket.pr_number,round:ticket.round || 1})}\nPR情報: ${JSON.stringify(pr)}\n${context ? `前回までの対応: ${context}\n` : ''}最新の発言: ${JSON.stringify(question)}\n会話の文脈: ${history}`, {cwd:snapshot.path,repoReadOnly:true});
+      const result = await this.ai.ask(supportRole.name, `完了済みの Discord スレッドへの新しい発言を判断してください。現在の ${this.config.baseBranch || 'develop'} と関連 docs、PR 情報を読みます。実装の質問なら action="answer" として確認できたソースのパスを含む正確な説明を返します。新しい不具合・回帰・追加の改修依頼なら action="new_fix" とします。このスレッドで続けて対応するので、ここまでの会話と前回の対応を前提に、今回の依頼を title と summary にまとめます。再現手順など必要な情報が足りないなら action="clarify" として短く質問します。既に質問済みの内容を繰り返し聞かないでください。コード変更は不要です。返す JSON: {"action":"answer|new_fix|clarify","answer":"回答または確認質問","title":"今回の対応の短い件名","summary":"不具合や要望と期待結果の要約"}。\n\n今回の案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,pr:ticket.pr_number,round:ticket.round || 1})}\nPR情報: ${JSON.stringify(pr)}\n${context ? `前回までの対応: ${context}\n` : ''}最新の発言: ${JSON.stringify(question)}\n会話の文脈: ${history}`, {cwd:snapshot.path,repoReadOnly:true,speaking:true});
       if (result.action === 'new_fix') {
         const previousPr = ticket.pr_number;
         this.startRound(id,messageId,result);
@@ -383,7 +384,7 @@ ${history}
       if (!text) return;
       role = await this.acquireRole('PM',id);
       const reason = this.store.getKv(`decline:${id}`) || '';
-      const result = await this.ai.ask(role.name, `見送った案件のスレッドに新しい発言がありました。見送りへの異議・再検討の依頼なら action="appeal"、見送り理由を受けて別の形の依頼に変えたものなら action="revise"、了承やお礼など対応が要らないなら action="none" にします。返す JSON: {"action":"appeal|revise|none","reply":"ユーザーへの短い返信"}。\n\n案件: ${ticket.title}\n見送り理由: ${reason}\n新しい発言: ${JSON.stringify(text)}`, {provider:this.config.intakeProvider || 'codex',cwd:this.config.repo,repoReadOnly:true,timeoutMs:2*60_000});
+      const result = await this.ai.ask(role.name, `見送った案件のスレッドに新しい発言がありました。見送りへの異議・再検討の依頼なら action="appeal"、見送り理由を受けて別の形の依頼に変えたものなら action="revise"、了承やお礼など対応が要らないなら action="none" にします。返す JSON: {"action":"appeal|revise|none","reply":"ユーザーへの短い返信"}。\n\n案件: ${ticket.title}\n見送り理由: ${reason}\n新しい発言: ${JSON.stringify(text)}`, {provider:this.config.intakeProvider || 'codex',cwd:this.config.repo,repoReadOnly:true,timeoutMs:2*60_000,speaking:true});
       this.store.update(id,{answered_message_id:messageId});
       if (result.action === 'revise') {
         this.store.update(id,{status:'intake'});
@@ -393,7 +394,7 @@ ${history}
         return;
       }
       if (result.action === 'appeal') {
-        if (!discordId(this.config.decisionMentionId)) {
+        if (!decisionUserIds(this.store,this.config).length) {
           await this.post(id, role.id, `見送りへの異議を判断する決定者が設定されていないため、受け付けられません。運用担当に連絡してください。`);
           return;
         }
@@ -424,7 +425,7 @@ ${history}
 返す JSON: {"verdict":"implement|propose|decline|decision","duplicateOf":"既存IDまたは空文字","purpose":"推定した目的","reason":"判断理由","proposal":"提案または代案","decisionQuestion":"判断すべき内容と選択肢","title":"短い件名","summary":"背景と期待結果","criteria":["観測可能な受け入れ条件"],"implementationTask":"実装担当への具体的な指示"}。
 
 現案件: ${JSON.stringify(input)}
-既存案件: ${JSON.stringify(candidates)}`, {cwd,repoReadOnly:true});
+既存案件: ${JSON.stringify(candidates)}`, {cwd,repoReadOnly:true,speaking:true});
   }
   async plan(id, history, decisionAnswer = '', { cwd = '', proposal = '', appeal = false } = {}) {
     let snapshot;
@@ -492,12 +493,12 @@ ${history}
     await this.tick();
   }
   restrictedDecision(id) {
-    return restrictedKinds.includes(this.store.getKv(`decision-kind:${id}`)) && Boolean(discordId(this.config.decisionMentionId));
+    return restrictedKinds.includes(this.store.getKv(`decision-kind:${id}`)) && decisionUserIds(this.store,this.config).length > 0;
   }
   async askDecision(id, question, kind = 'decision') {
     this.store.setKv(`decision-kind:${id}`,kind);
     const ticket = this.store.update(id, { status: 'decision' });
-    const decider = discordId(this.config.decisionMentionId);
+    const decider = decisionUserIds(this.store,this.config)[0] || '';
     const fallback = decider || discordId(this.store.getKv(`last-author:${id}`)) || discordId(await this.discord.threadOwnerId?.(id).catch(() => null));
     const decisionThread = await this.discord.decision(ticket, question, {mentionUserId:fallback});
     this.store.update(id, { decision_thread_id: decisionThread || null });
@@ -509,7 +510,7 @@ ${history}
     const ticket = this.store.get(id);
     if (ticket?.status !== 'decision') return;
     const appeal = this.store.getKv(`decision-kind:${id}`) === 'appeal';
-    if (this.restrictedDecision(id) && author !== this.config.decisionMentionId) {
+    if (this.restrictedDecision(id) && !isDecisionUser(this.store,this.config,author)) {
       await this.post(channelId || ticket.decision_thread_id || id, 'pm', `この判断は決定者の回答で決めます。決定者の回答を待っています。`).catch(() => {});
       return;
     }

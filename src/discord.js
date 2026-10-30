@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { syncThreadStatus } from './thread-status.js';
+import { decisionUserIds } from './settings.js';
 
 const legacyTranslationBlock = '\n\n🌐 **翻訳 / Translations / 번역**';
 const translationBlock = /\n\n(?=(?:🇯🇵|🇺🇸|🇰🇷) )/u;
@@ -179,10 +180,11 @@ export class DiscordTransport {
     }
     const forum = await this.client.channels.fetch(this.config.decisionForumId);
     if (forum?.type !== ChannelType.GuildForum) throw new Error('DISCORD_DECISION_FORUM_ID is not a Forum channel');
-    const mention = this.config.decisionMentionId ? `<@${this.config.decisionMentionId}> ` : '';
+    const deciders = decisionUserIds(this.store, this.config);
+    const mention = deciders.length ? `${deciders.map(id => `<@${id}>`).join(' ')} ` : '';
     const post = await forum.threads.create({
       name: `判断依頼｜${ticket.title}`.slice(0, 100),
-      message: { content: `${mention}**${ticket.title}**\n元のフィードバック: https://discord.com/channels/${forum.guildId}/${ticket.id}`, allowedMentions: this.config.decisionMentionId ? { users: [this.config.decisionMentionId] } : { parse: [] } }
+      message: { content: `${mention}**${ticket.title}**\n元のフィードバック: https://discord.com/channels/${forum.guildId}/${ticket.id}`, allowedMentions: deciders.length ? { users: deciders } : { parse: [] } }
     });
     await this.say(post.id, `**背景**\n${ticket.summary}\n\n**確認したいこと**\n${question}`,{as:'pm'});
     return post.id;
