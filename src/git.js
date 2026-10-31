@@ -103,6 +103,10 @@ export class GitHub {
     if (!number) return;
     await this.gh(['issue','close',String(number),'--repo',this.config.githubRepo,'--comment',note]);
   }
+  async hasChanges(path) {
+    const status = await this.git(['status','--porcelain'], path);
+    return Boolean(status.stdout.trim());
+  }
   async commitPush(path, branch, title, onRetry = () => {}) {
     const status = await this.git(['status','--porcelain'], path);
     if (!status.stdout) throw new Error('Agent made no code changes');

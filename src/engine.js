@@ -2,14 +2,14 @@ import { roles } from './config.js';
 import { existsSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { SnowflakeUtil } from 'discord.js';
-import { userFacingChanges } from './ai.js';
+import { userFacingChanges, unverifiedPoints, USER_FACING_MARK, UNVERIFIED_MARK } from './ai.js';
 import { decisionUserIds, isDecisionUser, customizedMemberIds } from './settings.js';
 
 const roleName = id => roles.find(role => role.id === id)?.name || id;
 const asList = value => Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 const trim = (value, length = 1500) => String(value || '').slice(0, length);
 const discordId = value => /^\d{17,20}$/.test(String(value || '')) ? String(value) : '';
-const statusEvents = new Set(['intake_started','question','decision','decision_answer','ready','queued','coding','retry_scheduled','release_retry','pr_ready','integrating','merged','existing','grouped','failed','needs_instruction','proposal','declined','round_started','main_released']);
+const statusEvents = new Set(['intake_started','question','decision','decision_answer','ready','queued','coding','retry_scheduled','release_retry','pr_ready','integrating','merged','existing','grouped','failed','needs_instruction','proposal','declined','round_started','main_released','investigation']);
 const doneStatuses = ['grouped','failed','merged','resolved_existing','declined'];
 const beforePrStatuses = ['intake','waiting_info','proposal','planning','decision','queued','coding'];
 const verdicts = ['implement','propose','decline','decision'];
@@ -128,6 +128,12 @@ export class Engine {
     try { return asList(JSON.parse(this.store.getKv(`unknowns:${id}`) || '[]')); }
     catch { return []; }
   }
+  storedList(key) {
+    try { return asList(JSON.parse(this.store.getKv(key) || '[]')).filter(value => value !== 'なし'); }
+    catch { return []; }
+  }
+  productionChecks(id) { return this.storedList(`production-checks:${id}`); }
+  investigation(id) { return this.store.getKv(`investigation:${id}`) === '1'; }
   addenda(id) {
     try { return asList(JSON.parse(this.store.getKv(`addenda:${id}`) || '[]').map(entry => entry?.text)); }
     catch { return []; }
@@ -464,12 +470,12 @@ ${history}
       ? '決定者が見送りへの異議に回答しました。決定者の回答に従ってください。実装を認める回答なら decline にしないでください。'
       : '人の判断への回答があります。その回答を前提に判断してください。' : '';
     return this.ai.ask(roleName('pm'), `次の声を開発案件として判断してください。作業コピーは受付時点の ${this.config.baseBranch || 'develop'} です。コードと docs を読み、既存の設計・開発方針・判断基準に照らして決めます。
-- verdict="implement": 目的に合い、方針に沿うので実装する。implementationTask に依頼者の目的と、既存の仕組みのどこを広げて実現するかを書く。
+- verdict="implement": 目的に合い、方針に沿うので実装する。implementationTask に依頼者の目的と、既存の仕組みのどこを広げて実現するかを書く。criteria は自動で検証できる条件だけにし、実機・目視でしか確かめられない確認は productionChecks に分ける。原因が未特定で、まず仮説の検証と証拠集めが必要な不具合は investigation=true にし、implementationTask には調査の進め方と報告すべき項目を書く（成果物は修正ではなく調査報告で、変更がなくても失敗ではない）。
 - verdict="propose": 依頼の条件どおりより目的に合う作り方がある、または解釈が複数ある。proposal に推定した目的と具体的な案（3つまで、推奨を明記）を書き、依頼者の返答を待つ。規模が大きい・複数の仕組みにまたがる・既存の挙動を変える複雑な案件は、条件どおりに作る場合でも propose にし、proposal に計画（目的、やること／やらないこと、進め方、影響範囲、未確認事項とその扱い）を書いて依頼者の承認を待ちます。承認されるまで実装には進みません。
 - verdict="decline": 判断基準の「断る」に当たる、または方針から大きく外れる。reason に理由、proposal に方針内の代案（あれば）を書く。
 - verdict="decision": 製品として人が決めるべき判断が残る。decisionQuestion に問いと選択肢を書く。単なる実装上の選択は自分で決める。
 似た既存案件があれば duplicateOf に正確な ID を入れる。${decided}${input.proposal ? '前回の提案への依頼者の返答が会話にあります。合意された案なら implement に、返答に合わせて案を直すなら propose にしてください。' : ''}
-返す JSON: {"verdict":"implement|propose|decline|decision","duplicateOf":"既存IDまたは空文字","purpose":"推定した目的","reason":"判断理由","proposal":"提案または代案","decisionQuestion":"判断すべき内容と選択肢","title":"短い件名","summary":"背景と期待結果","criteria":["観測可能な受け入れ条件"],"implementationTask":"実装担当への具体的な指示"}。
+返す JSON: {"verdict":"implement|propose|decline|decision","duplicateOf":"既存IDまたは空文字","purpose":"推定した目的","reason":"判断理由","proposal":"提案または代案","decisionQuestion":"判断すべき内容と選択肢","title":"短い件名","summary":"背景と期待結果","criteria":["自動で検証できる受け入れ条件"],"productionChecks":["本番で確認する項目"],"investigation":boolean,"implementationTask":"実装担当への具体的な指示"}。
 
 現案件: ${JSON.stringify(input)}
 既存案件: ${JSON.stringify(candidates)}`, {cwd,repoReadOnly:true,roleId:'pm'});
@@ -525,9 +531,12 @@ ${history}
       return;
     }
     this.store.setKv(`proposal:${id}`,'');
+    const productionChecks = asList(result.productionChecks).slice(0, 10);
+    this.store.setKv(`production-checks:${id}`, JSON.stringify(productionChecks));
+    this.store.setKv(`investigation:${id}`, result.investigation ? '1' : '');
     const leadRole = await this.acquireRole('開発リード',id);
     let lead;
-    try { lead = await this.ai.ask(leadRole.name, `開発リードとして、PM の方針を実装担当への作業指示に落とします。作業コピーのコードを読み、関連する既存の仕組み、変更するファイル、壊しやすい既存機能を確認してください。受け入れ条件を満たすためだけの特別扱いやハードコードは指示しません。未確認事項（unknowns）がある場合は、その前提を作業指示に明示し、推測で決めずコード調査で確かめる順序にしてください。製品判断の不足があれば needsDecision=true。返す JSON: {"needsDecision": boolean, "decisionQuestion": "不足している判断", "task": "実装担当への明確な作業指示（目的、方針、変更箇所、確認方法）", "risk": "主な注意点"}。\n\n案件: ${JSON.stringify({title:result.title,purpose,summary,criteria,implementationTask:result.implementationTask,decisionAnswer,unknowns:this.unknowns(id)})}`, {cwd,repoReadOnly:true,roleId:leadRole.id});
+    try { lead = await this.ai.ask(leadRole.name, `開発リードとして、PM の方針を実装担当への作業指示に落とします。作業コピーのコードを読み、関連する既存の仕組み、変更するファイル、壊しやすい既存機能を確認してください。受け入れ条件を満たすためだけの特別扱いやハードコードは指示しません。未確認事項（unknowns）がある場合は、その前提を作業指示に明示し、推測で決めずコード調査で確かめる順序にしてください。調査案件（investigation）では、成果物は調査報告です。仮説の検証手順と報告すべき項目を作業指示に含めてください。製品判断の不足があれば needsDecision=true。返す JSON: {"needsDecision": boolean, "decisionQuestion": "不足している判断", "task": "実装担当への明確な作業指示（目的、方針、変更箇所、確認方法）", "risk": "主な注意点"}。\n\n案件: ${JSON.stringify({title:result.title,purpose,summary,criteria,implementationTask:result.implementationTask,decisionAnswer,unknowns:this.unknowns(id),productionChecks,investigation:Boolean(result.investigation)})}`, {cwd,repoReadOnly:true,roleId:leadRole.id});
     } finally { this.releaseRole(leadRole); }
     if (lead.needsDecision) {
       await this.askDecision(id, trim(lead.decisionQuestion || '開発方針を確認してください'));
@@ -536,7 +545,7 @@ ${history}
     this.store.update(id, { status: 'queued', error: null });
     this.store.setKv(`task:${id}`, trim(lead.task || result.implementationTask || summary, 12000));
     this.event(id, leadRole.id, 'queued', trim(lead.risk || '実装担当へ割り当て待ち', 500));
-    await this.post(id, leadRole.id, `案件として受け付けました。${criteria.length ? `受け入れ条件: ${criteria.join(' / ')}` : ''}`);
+    await this.post(id, leadRole.id, `案件として受け付けました。${criteria.length ? `受け入れ条件: ${criteria.join(' / ')}` : ''}${productionChecks.length ? ` 本番で確認: ${productionChecks.join(' / ')}` : ''}`);
     await this.tick();
   }
   restrictedDecision(id) {
@@ -616,7 +625,7 @@ ${history}
     const linked = this.store.list().filter(row => row.parent_ticket_id === id && row.status === 'grouped').map(row => row.summary);
     const addenda = this.addenda(id);
     const unknowns = this.unknowns(id);
-    return `${purpose ? `依頼者の目的: ${purpose}\n\n` : ''}${this.store.getKv(`task:${id}`) || ticket.summary}\n\n受け入れ条件:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}${unknowns.length ? `\n\n未確認事項（聞き取りで確認できなかった点。推測で決めず、まずコードや再現で確かめる。聞き取りで質問済みの内容をそのまま聞き直さない）:\n${unknowns.map(x => `- ${x}`).join('\n')}` : ''}${linked.length ? `\n\n追加の声:\n${linked.join('\n')}` : ''}${addenda.length ? `\n\nスレッドでの追加の発言（目的に照らして取り込み、矛盾するなら NEEDS_CLARIFICATION で質問）:\n${addenda.map(x => `- ${x}`).join('\n')}` : ''}${previous?.error && retryStage !== 'publish' ? `\n\n前回の失敗を修正してください:\n${trim(previous.error,1500)}` : ''}${retryInstruction && retryStage !== 'publish' ? `\n\nPM からの再作業指示:\n${retryInstruction}` : ''}`;
+    return `${purpose ? `依頼者の目的: ${purpose}\n\n` : ''}${this.store.getKv(`task:${id}`) || ticket.summary}\n\n受け入れ条件:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}${this.investigation(id) ? `\n\nこれは調査案件です。成果物は調査報告（原因の仮説、確認した範囲、否定できた原因、残った可能性、次に必要な証拠）で、報告書の本文にそのまま書いてください。原因が特定できて安全に直せる場合のみ変更します。変更がないこと自体は失敗ではありません。` : ''}${unknowns.length ? `\n\n未確認事項（聞き取りで確認できなかった点。推測で決めず、まずコードや再現で確かめる。聞き取りで質問済みの内容をそのまま聞き直さない）:\n${unknowns.map(x => `- ${x}`).join('\n')}` : ''}${linked.length ? `\n\n追加の声:\n${linked.join('\n')}` : ''}${addenda.length ? `\n\nスレッドでの追加の発言（目的に照らして取り込み、矛盾するなら NEEDS_CLARIFICATION で質問）:\n${addenda.map(x => `- ${x}`).join('\n')}` : ''}${previous?.error && retryStage !== 'publish' ? `\n\n前回の失敗を修正してください:\n${trim(previous.error,1500)}` : ''}${retryInstruction && retryStage !== 'publish' ? `\n\nPM からの再作業指示:\n${retryInstruction}` : ''}`;
   }
   async designReview(id, ticket, task, path) {
     if (!this.git.reviewDiff) return null;
@@ -685,9 +694,20 @@ ${history}
           reviewNote = asList(review.issues).map(x => `- ${x}`).join('\n');
         }
         this.store.setKv(`user-changes:${id}`,JSON.stringify(userFacingChanges(report)));
+        this.store.setKv(`unverified:${id}`,JSON.stringify(unverifiedPoints(report)));
         const restored = await this.git.restoreChangelog?.(worktree.path,baseSha) || [];
         if (restored.length) this.event(id,worker.id,'changelog_restored',`変更履歴は main 反映時に作るため取り消し: ${trim(restored.join(', '),300)}`);
         await this.git.test(worktree.path);
+        if (this.investigation(id) && !(this.git.hasChanges ? await this.git.hasChanges(worktree.path) : true)) {
+          // 調査案件で変更がなかった場合は失敗ではなく、調査報告で一区切りにする
+          const narrative = trim(String(report).split(UNVERIFIED_MARK)[0].split(USER_FACING_MARK)[0], 6000);
+          this.store.setKv(`investigation-report:${id}`, narrative);
+          this.store.update(id, { status: 'waiting_info', worker: null });
+          this.event(id, worker.id, 'investigation', trim(narrative, 500));
+          completed = true;
+          await this.post(id, worker.id, `調査をしました。今回はコードの変更はありません。\n\n${trim(narrative, 1600)}\n\n追加の情報や、進め方の希望があれば、このスレッドで教えてください。`).catch(error => this.event(id,worker.id,'discord_warning',trim(error.message,300)));
+          return;
+        }
         stage = 'publish';
         await this.git.commitPush(worktree.path, worktree.branch, `feat(agent): ${ticket.title}`.slice(0, 100), (attempt,error) => this.event(id,'pm','push_retry',`GitHub push 再試行 ${attempt}: ${trim(error.message,300)}`));
       }
@@ -700,7 +720,14 @@ ${history}
       this.store.setKv(`retry-instruction:${id}`,'');
       this.event(id, worker.id, 'pr_ready', `PR #${pr} を検証済み。出荷待ち`);
       completed = true;
-      await this.post(id, worker.id, `変更とテストが完了しました。PR #${pr} を出荷待ちに入れました。`).catch(error => this.event(id,worker.id,'discord_warning',trim(error.message,300)));
+      const visibleChanges = changes.filter(value => value !== 'なし');
+      const unverified = this.storedList(`unverified:${id}`);
+      const checks = this.productionChecks(id);
+      const lines = [`変更とテストが完了しました。PR #${pr} を出荷待ちに入れました。`];
+      if (visibleChanges.length) lines.push(`変わること:\n${visibleChanges.map(value => `- ${value}`).join('\n')}`);
+      if (unverified.length) lines.push(`未確認の点:\n${unverified.map(value => `- ${value}`).join('\n')}`);
+      if (checks.length) lines.push(`本番で確認をお願いしたい点:\n${checks.map(value => `- ${value}`).join('\n')}`);
+      await this.post(id, worker.id, lines.join('\n')).catch(error => this.event(id,worker.id,'discord_warning',trim(error.message,300)));
     } catch (error) {
       const retryStage = stage === 'publish' && /^git (?:add|commit|status)\b/.test(error.message) ? 'code' : stage;
       const priorFailures = Math.max(Number(this.store.getKv(`failure-count:${id}`) || 0),Number(this.store.getKv(`retry-count:${id}:code`) || 0),Number(this.store.getKv(`retry-count:${id}:publish`) || 0));
@@ -726,7 +753,7 @@ ${history}
     const role = await this.acquireRole('PM',id);
     let decision;
     try {
-      decision = await this.ai.ask(role.name, `実装案件で失敗が起きました。作業ツリーの状態とエラーを確認し、同じ作業を再試行する価値があるか判断してください。GitHub への一時的な push 失敗なら再試行を選びます。コードやテストの失敗なら、修正の具体的な指示を付けます。認証・権限など人の操作が必要なら停止します。返す JSON: {"retry":boolean,"reason":"判断理由","instruction":"実装担当への修正指示"}。\n\n案件: ${this.store.get(id)?.title}\n段階: ${stage}\n失敗: ${trim(error.message,1500)}`, {provider:this.config.intakeProvider || 'codex',cwd:worktree.path,repoReadOnly:true,timeoutMs:2*60_000,roleId:role.id});
+      decision = await this.ai.ask(role.name, `実装案件で失敗が起きました。作業ツリーの状態とエラーを確認し、同じ作業を再試行する価値があるか判断してください。GitHub への一時的な push 失敗なら再試行を選びます。コードやテストの失敗なら、修正の具体的な指示を付けます。認証・権限など人の操作が必要なら停止します。reason には確認できた事実だけを書き、確認できていない原因（GitHub の一時障害など）を断定しないでください。返す JSON: {"retry":boolean,"reason":"判断理由","instruction":"実装担当への修正指示"}。\n\n案件: ${this.store.get(id)?.title}\n段階: ${stage}\n失敗: ${trim(error.message,1500)}`, {provider:this.config.intakeProvider || 'codex',cwd:worktree.path,repoReadOnly:true,timeoutMs:2*60_000,roleId:role.id});
     } catch (reviewError) {
       this.event(id,role.id,'retry_review_warning',trim(reviewError.message,300));
       decision = {retry:stage === 'publish',reason:'GitHub への送信を再試行します',instruction:''};
