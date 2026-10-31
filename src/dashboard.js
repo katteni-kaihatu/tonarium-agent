@@ -27,7 +27,21 @@ export class Dashboard {
   }
   state() {
     const tickets = this.store.list().map(row => ({ ...row, criteria: JSON.parse(row.criteria || '[]') }));
-    const releases = this.store.releases().map(row => ({ ...row, tickets: JSON.parse(row.tickets || '[]') }));
+    // リリース履歴用に、その回へ入ったチケットの題名を引けるようにする。
+    // 一覧（直近200件）に無い古いチケットは store.get で拾い、見つからなければ題名なしで残す
+    const ticketById = new Map(tickets.map(ticket => [ticket.id, ticket]));
+    const lookupTicket = id => {
+      if (!ticketById.has(id)) {
+        let row = null;
+        try { row = this.store.get(id); } catch { row = null; }
+        ticketById.set(id, row ? { id: row.id, title: row.title || '', issue_number: row.issue_number ?? null } : { id, title: '', issue_number: null });
+      }
+      return ticketById.get(id);
+    };
+    const releases = this.store.releases().map(row => {
+      const ticketIds = JSON.parse(row.tickets || '[]');
+      return { ...row, tickets: ticketIds, contents: ticketIds.map(id => { const ticket = lookupTicket(id); return { id, title: ticket.title || '', issue_number: ticket.issue_number ?? null }; }) };
+    });
     return {
       title: 'TONARIUM / AGENT STUDIO',
       mode: this.config.discordToken ? 'live' : 'setup',
