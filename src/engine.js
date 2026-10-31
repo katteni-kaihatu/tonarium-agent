@@ -122,6 +122,12 @@ export class Engine {
     const mentionUserId = (to === 'owner' ? owner || author : author || owner) || '';
     return this.discord.say(id,text,{mentionUserId,as});
   }
+  // 聞き取りで未確認のまま残った事項。PM・リード・実装へ引き継ぎ、
+  // 同じ質問の繰り返しと、未確認の前提への無自覚な依存を防ぐ
+  unknowns(id) {
+    try { return asList(JSON.parse(this.store.getKv(`unknowns:${id}`) || '[]')); }
+    catch { return []; }
+  }
   addenda(id) {
     try { return asList(JSON.parse(this.store.getKv(`addenda:${id}`) || '[]').map(entry => entry?.text)); }
     catch { return []; }
@@ -301,9 +307,10 @@ export class Engine {
       const result = await this.ai.ask(intakeRole.name, `Discord の要望・不具合報告を聞き取る担当です。この作業コピーは発言時の ${this.config.baseBranch || 'develop'} (${baseSha}) です。依頼文の条件をそのまま案件にせず、依頼者が困っている場面と実現したいことを汲み取ります。
 1. 既存案件に同じ声があれば duplicateOf にその正確な ID を入れます。
 2. このリポジトリのコードと docs を読み、既存機能で解決できるなら alreadyExists=true、evidencePath に確認したリポジトリ相対ファイルパスを入れ、使い方を reply で伝えます。機能が存在しても報告が不具合なら完了扱いにしません。
-3. 目的（誰が・どの場面で・何に困っているか）と期待結果が分かれば ready=true にします。条件だけ分かって目的が分からないとき、または再現条件が必要な不具合で情報が足りないときは、次に必要なことを一つだけ聞きます。既出の内容を繰り返して質問しないでください。
+3. 目的（誰が・どの場面で・何に困っているか）と期待結果が分かれば ready=true にします。条件だけ分かって目的が分からないとき、または再現条件が必要な不具合で情報が足りないときは、次に必要なことを一つだけ聞きます。質問には答えやすいように選択肢を付け（端末・ブラウザ・発生画面などの定型項目は特に）、分からなければ分からないと答えてよいことも伝えてください。不明な点を推測で埋めて ready にしないでください。既出の内容を繰り返して質問しないでください。
 4. 前回までの対応・提案・追加の発言があれば、それを前提に今回の分を整理します。提案への返答なら、合意した内容を summary に入れて ready=true にします。
-返す JSON: {"ready": boolean, "reply": "ユーザーへの自然な日本語の短い返信または質問", "title": "短い件名", "purpose": "依頼者の目的", "summary": "背景と期待結果", "criteria": ["受け入れ条件"], "duplicateOf": "既存案件IDまたは空文字", "alreadyExists": boolean, "evidencePath": "リポジトリ相対パスまたは空文字"}。
+5. この時点で未確認の事項（質問したが答えがなかったもの、確認できなかった前提）は unknowns に入れます。後工程が同じ質問を繰り返さず、未確認の前提を自覚して進めるための引き継ぎです。未確認がなければ空配列にします。
+返す JSON: {"ready": boolean, "reply": "ユーザーへの自然な日本語の短い返信または質問", "title": "短い件名", "purpose": "依頼者の目的", "summary": "背景と期待結果", "criteria": ["受け入れ条件"], "unknowns": ["未確認事項"], "duplicateOf": "既存案件IDまたは空文字", "alreadyExists": boolean, "evidencePath": "リポジトリ相対パスまたは空文字"}。
 
 スレッド名: ${ticket.title}
 ${context ? `前回までの対応: ${context}\n` : ''}${proposal ? `PM の提案（返答待ち）: ${proposal}\n` : ''}${addenda.length ? `追加の発言: ${JSON.stringify(addenda)}\n` : ''}会話:
@@ -314,6 +321,7 @@ ${history}
       const update = { title: trim(result.title || ticket.title, 100), summary: trim(`${purpose ? `目的: ${purpose}\n` : ''}${result.summary || ''}`, 3000), criteria: JSON.stringify(asList(result.criteria)) };
       this.store.update(id, update);
       if (purpose) this.store.setKv(`purpose:${id}`,purpose);
+      this.store.setKv(`unknowns:${id}`, JSON.stringify(asList(result.unknowns).slice(0, 10)));
       const duplicate = similar.find(row => row.id === String(result.duplicateOf));
       if (duplicate) {
         this.store.update(id, { status:'grouped', parent_ticket_id:duplicate.id });
@@ -457,7 +465,7 @@ ${history}
       : '人の判断への回答があります。その回答を前提に判断してください。' : '';
     return this.ai.ask(roleName('pm'), `次の声を開発案件として判断してください。作業コピーは受付時点の ${this.config.baseBranch || 'develop'} です。コードと docs を読み、既存の設計・開発方針・判断基準に照らして決めます。
 - verdict="implement": 目的に合い、方針に沿うので実装する。implementationTask に依頼者の目的と、既存の仕組みのどこを広げて実現するかを書く。
-- verdict="propose": 依頼の条件どおりより目的に合う作り方がある、または解釈が複数ある。proposal に推定した目的と具体的な案（3つまで、推奨を明記）を書き、依頼者の返答を待つ。
+- verdict="propose": 依頼の条件どおりより目的に合う作り方がある、または解釈が複数ある。proposal に推定した目的と具体的な案（3つまで、推奨を明記）を書き、依頼者の返答を待つ。規模が大きい・複数の仕組みにまたがる・既存の挙動を変える複雑な案件は、条件どおりに作る場合でも propose にし、proposal に計画（目的、やること／やらないこと、進め方、影響範囲、未確認事項とその扱い）を書いて依頼者の承認を待ちます。承認されるまで実装には進みません。
 - verdict="decline": 判断基準の「断る」に当たる、または方針から大きく外れる。reason に理由、proposal に方針内の代案（あれば）を書く。
 - verdict="decision": 製品として人が決めるべき判断が残る。decisionQuestion に問いと選択肢を書く。単なる実装上の選択は自分で決める。
 似た既存案件があれば duplicateOf に正確な ID を入れる。${decided}${input.proposal ? '前回の提案への依頼者の返答が会話にあります。合意された案なら implement に、返答に合わせて案を直すなら propose にしてください。' : ''}
@@ -481,7 +489,7 @@ ${history}
     const candidates = this.store.list().filter(row => row.id !== id && !doneStatuses.includes(row.status))
       .map(row => ({ id: row.id, title: row.title, summary: row.summary, status: row.status })).slice(0, 50);
     const context = await this.roundContext(id);
-    const result = await this.pmReview({id,title:ticket.title,summary:ticket.summary,criteria:ticket.criteria,history,decisionAnswer,appeal,proposal,previous:context,addenda:this.addenda(id)},cwd,candidates);
+    const result = await this.pmReview({id,title:ticket.title,summary:ticket.summary,criteria:ticket.criteria,history,decisionAnswer,appeal,proposal,previous:context,addenda:this.addenda(id),unknowns:this.unknowns(id)},cwd,candidates);
     const duplicate = candidates.find(row => row.id === String(result.duplicateOf));
     if (duplicate) {
       this.store.update(id, { status: 'grouped', parent_ticket_id: duplicate.id, summary: trim(result.summary || ticket.summary, 3000) });
@@ -519,7 +527,7 @@ ${history}
     this.store.setKv(`proposal:${id}`,'');
     const leadRole = await this.acquireRole('開発リード',id);
     let lead;
-    try { lead = await this.ai.ask(leadRole.name, `開発リードとして、PM の方針を実装担当への作業指示に落とします。作業コピーのコードを読み、関連する既存の仕組み、変更するファイル、壊しやすい既存機能を確認してください。受け入れ条件を満たすためだけの特別扱いやハードコードは指示しません。製品判断の不足があれば needsDecision=true。返す JSON: {"needsDecision": boolean, "decisionQuestion": "不足している判断", "task": "実装担当への明確な作業指示（目的、方針、変更箇所、確認方法）", "risk": "主な注意点"}。\n\n案件: ${JSON.stringify({title:result.title,purpose,summary,criteria,implementationTask:result.implementationTask,decisionAnswer})}`, {cwd,repoReadOnly:true,roleId:leadRole.id});
+    try { lead = await this.ai.ask(leadRole.name, `開発リードとして、PM の方針を実装担当への作業指示に落とします。作業コピーのコードを読み、関連する既存の仕組み、変更するファイル、壊しやすい既存機能を確認してください。受け入れ条件を満たすためだけの特別扱いやハードコードは指示しません。未確認事項（unknowns）がある場合は、その前提を作業指示に明示し、推測で決めずコード調査で確かめる順序にしてください。製品判断の不足があれば needsDecision=true。返す JSON: {"needsDecision": boolean, "decisionQuestion": "不足している判断", "task": "実装担当への明確な作業指示（目的、方針、変更箇所、確認方法）", "risk": "主な注意点"}。\n\n案件: ${JSON.stringify({title:result.title,purpose,summary,criteria,implementationTask:result.implementationTask,decisionAnswer,unknowns:this.unknowns(id)})}`, {cwd,repoReadOnly:true,roleId:leadRole.id});
     } finally { this.releaseRole(leadRole); }
     if (lead.needsDecision) {
       await this.askDecision(id, trim(lead.decisionQuestion || '開発方針を確認してください'));
@@ -607,7 +615,8 @@ ${history}
     const purpose = this.store.getKv(`purpose:${id}`);
     const linked = this.store.list().filter(row => row.parent_ticket_id === id && row.status === 'grouped').map(row => row.summary);
     const addenda = this.addenda(id);
-    return `${purpose ? `依頼者の目的: ${purpose}\n\n` : ''}${this.store.getKv(`task:${id}`) || ticket.summary}\n\n受け入れ条件:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}${linked.length ? `\n\n追加の声:\n${linked.join('\n')}` : ''}${addenda.length ? `\n\nスレッドでの追加の発言（目的に照らして取り込み、矛盾するなら NEEDS_CLARIFICATION で質問）:\n${addenda.map(x => `- ${x}`).join('\n')}` : ''}${previous?.error && retryStage !== 'publish' ? `\n\n前回の失敗を修正してください:\n${trim(previous.error,1500)}` : ''}${retryInstruction && retryStage !== 'publish' ? `\n\nPM からの再作業指示:\n${retryInstruction}` : ''}`;
+    const unknowns = this.unknowns(id);
+    return `${purpose ? `依頼者の目的: ${purpose}\n\n` : ''}${this.store.getKv(`task:${id}`) || ticket.summary}\n\n受け入れ条件:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}${unknowns.length ? `\n\n未確認事項（聞き取りで確認できなかった点。推測で決めず、まずコードや再現で確かめる。聞き取りで質問済みの内容をそのまま聞き直さない）:\n${unknowns.map(x => `- ${x}`).join('\n')}` : ''}${linked.length ? `\n\n追加の声:\n${linked.join('\n')}` : ''}${addenda.length ? `\n\nスレッドでの追加の発言（目的に照らして取り込み、矛盾するなら NEEDS_CLARIFICATION で質問）:\n${addenda.map(x => `- ${x}`).join('\n')}` : ''}${previous?.error && retryStage !== 'publish' ? `\n\n前回の失敗を修正してください:\n${trim(previous.error,1500)}` : ''}${retryInstruction && retryStage !== 'publish' ? `\n\nPM からの再作業指示:\n${retryInstruction}` : ''}`;
   }
   async designReview(id, ticket, task, path) {
     if (!this.git.reviewDiff) return null;

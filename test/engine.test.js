@@ -349,6 +349,30 @@ test('role assignment is random among unchanged members when nobody is customize
   } finally { f.close(); }
 });
 
+test('intake unknowns are handed over to PM, lead and the implementation task', async () => {
+  const f = fixture();
+  try {
+    f.store.create('thread-1','アバターが黒くなる');
+    const prompts = [];
+    f.engine.ai = { ask: async (_role, prompt) => {
+      prompts.push(prompt);
+      if (prompt.includes('聞き取る担当')) return { ready:true, reply:'受け付けました', title:'アバターが黒くなる', purpose:'正常に表示したい', summary:'見る人によって黒く表示される', criteria:['黒くならない'], unknowns:['発生する端末が未確認','発生するブラウザが未確認'] };
+      if (prompt.includes('開発案件として判断')) return { verdict:'implement', purpose:'正常に表示したい', summary:'見る人によって黒く表示される', criteria:['黒くならない'], implementationTask:'画像の読み込み経路を調査して直す' };
+      if (prompt.includes('開発リードとして')) return { task:'作業指示' };
+      throw new Error(`unexpected prompt: ${prompt.slice(0, 40)}`);
+    } };
+    await f.engine.feedback('thread-1');
+    assert.deepEqual(f.engine.unknowns('thread-1'), ['発生する端末が未確認','発生するブラウザが未確認']);
+    const pmPrompt = prompts.find(prompt => prompt.includes('開発案件として判断'));
+    assert.ok(pmPrompt.includes('発生する端末が未確認'), 'PM へ未確認事項が渡る');
+    const leadPrompt = prompts.find(prompt => prompt.includes('開発リードとして'));
+    assert.ok(leadPrompt.includes('発生するブラウザが未確認'), 'リードへ未確認事項が渡る');
+    const task = f.engine.taskText('thread-1', f.store.get('thread-1'));
+    assert.match(task, /未確認事項/);
+    assert.ok(task.includes('発生する端末が未確認'), '実装タスクに未確認事項が載る');
+  } finally { f.close(); }
+});
+
 test('completed threads answer implementation questions without reopening the task', async () => {
   const f = fixture();
   try {
