@@ -10,12 +10,19 @@ export function setAvatarBaseUrl(url) {
   if (url) avatarBaseUrl = String(url).replace(/\/+$/,'');
   return avatarBaseUrl;
 }
+// 発話の添削（speech.js の SpeechPolisher）。エントリーポイントが起動時に差し込む。
+// 未設定なら添削なしで従来どおり送る。人格は判断には混ぜず、送信直前の文章だけを整える
+export let speechPolisher = null;
+export function setSpeechPolisher(polisher) {
+  speechPolisher = polisher || null;
+  return speechPolisher;
+}
 const threadTypes = new Set([10,11,12]);
 const retryAfterMs = 10 * 60_000;
 
 export function roleIdentity(id) {
   const role = roles.find(entry => entry.id === id);
-  return role ? { username:`${role.name}｜${role.job}`, avatarURL:`${avatarBaseUrl}/${role.avatarId || role.id}.png` } : null;
+  return role ? { username:`${role.name}｜${role.job}`, avatarURL:`${avatarBaseUrl}/${role.avatarId || role.id}.png`, roleId: role.id, personaId: role.personaId ?? null, name: role.name } : null;
 }
 
 export function chunk(text, limit = 1900) {
@@ -125,8 +132,15 @@ export class Poster {
   async say(channelId, text, { as = '', mentionUserId = '', mentionUserIds = [] } = {}) {
     const ids = mentionIds(mentionUserId, mentionUserIds);
     const mention = ids.length ? `${ids.map(id => `<@${id}>`).join(' ')} ` : '';
-    const body = withTranslations(text,await this.translate(text));
     const identity = roleIdentity(as);
+    // 送る文章が確定した後に、人格プロンプトで口調だけを添削する（判断には影響しない）。
+    // 添削側が失敗を握りつぶして原文を返す設計だが、念のためここでも原文に倒す
+    let spoken = text;
+    if (identity && speechPolisher) {
+      try { spoken = await speechPolisher.polish(text, identity); }
+      catch (error) { console.error('Speech polish failed; sending the original text:', error.message); }
+    }
+    const body = withTranslations(spoken,await this.translate(spoken));
     if (identity) {
       try { if (await this.execute(channelId,'agent',mention + body,{...identity,mentionUserIds:ids})) return; }
       catch (error) { console.error('Webhook post failed; posting as the bot:',error.message); }

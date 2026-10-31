@@ -194,7 +194,7 @@ export const PROMPT_FILES = [
   'WORKFLOW.md', 'policy/guardrails.md',
   'prompts/intake.md', 'prompts/pm.md', 'prompts/lead.md', 'prompts/builder.md',
   'prompts/support.md', 'prompts/integrator.md', 'prompts/release.md', 'prompts/main-release.md',
-  'prompts/translator.md', 'prompts/review.md'
+  'prompts/translator.md', 'prompts/review.md', 'prompts/speech.md'
 ];
 
 const promptOverrides = store => {

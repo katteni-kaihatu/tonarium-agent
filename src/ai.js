@@ -10,10 +10,10 @@ const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const codexScript = join(projectRoot, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
 const roleFiles = {
   '聞き取り':'intake.md', PM:'pm.md', '開発リード':'lead.md', '実装':'builder.md',
-  '実装案内':'support.md', '統合':'integrator.md', '出荷':'release.md', 'リリース':'main-release.md', '通訳':'translator.md'
+  '実装案内':'support.md', '統合':'integrator.md', '出荷':'release.md', 'リリース':'main-release.md', '通訳':'translator.md', '発話添削':'speech.md'
 };
-// 通訳は文を訳すだけなので、判断基準や開発方針を渡すと訳文に余計な補足が混ざる
-const withoutPolicy = new Set(['通訳']);
+// 通訳と発話添削は文を整えるだけなので、判断基準や開発方針を渡すと出力に余計な補足が混ざる
+const withoutPolicy = new Set(['通訳','発話添削']);
 export const USER_FACING_MARK = 'USER_FACING_CHANGES:';
 
 export function userFacingChanges(report) {
