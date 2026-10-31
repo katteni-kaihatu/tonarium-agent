@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AI, userFacingChanges } from '../src/ai.js';
+import { AI, userFacingChanges, unverifiedPoints } from '../src/ai.js';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,4 +42,15 @@ test('agent guidance reads versioned role Markdown, guardrails and the target di
 test('the builder report ends with user-facing changes for the PR body', () => {
   assert.deepEqual(userFacingChanges('変更しました\nUSER_FACING_CHANGES:\n- カメラにタイマーを追加\n- 音が鳴る\n'),['カメラにタイマーを追加','音が鳴る']);
   assert.deepEqual(userFacingChanges('報告だけ'),[]);
+});
+
+test('unverified points are parsed separately and never leak into user-facing changes', () => {
+  const report = '直しました\nUNVERIFIED_POINTS:\n- 実機の見た目は未確認\nUSER_FACING_CHANGES:\n- ボタンが揃う\n';
+  assert.deepEqual(unverifiedPoints(report),['実機の見た目は未確認']);
+  assert.deepEqual(userFacingChanges(report),['ボタンが揃う']);
+  // 順序が逆でも混ざらない
+  const reversed = '直しました\nUSER_FACING_CHANGES:\n- ボタンが揃う\nUNVERIFIED_POINTS:\n- 実機の見た目は未確認\n';
+  assert.deepEqual(userFacingChanges(reversed),['ボタンが揃う']);
+  assert.deepEqual(unverifiedPoints(reversed),['実機の見た目は未確認']);
+  assert.deepEqual(unverifiedPoints('報告だけ'),[]);
 });

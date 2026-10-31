@@ -585,6 +585,90 @@ test('implementation reports user-facing changes in the PR body and restores cha
   } finally { f.close(); }
 });
 
+test('the completion post shows user-facing changes, unverified points and production checks', async () => {
+  const f = fixture();
+  try {
+    f.store.create('task','ボタン配置');
+    f.store.update('task',{status:'queued',summary:'目的: 揃えたい',criteria:JSON.stringify(['ボタンが揃う'])});
+    f.store.setKv('production-checks:task', JSON.stringify(['実機で表示を確認']));
+    f.engine.git = {
+      ...f.engine.git,
+      prepare:async () => {}, issue:async () => 7,
+      resumeTaskWorktree:async () => null,
+      worktree:async () => ({path:f.dir,branch:'agent/task-2'}),
+      reviewDiff:async () => 'diff --git a/client b/client',
+      restoreChangelog:async () => [],
+      test:async () => {},
+      commitPush:async () => {},
+      findPr:async () => null,
+      pr:async () => 43,
+      removeWorktree:async () => {}
+    };
+    f.engine.ai = {
+      code:async () => '直しました\nUNVERIFIED_POINTS:\n- スマホ幅の見た目は未確認\nUSER_FACING_CHANGES:\n- ボタンの位置が揃う',
+      ask:async () => ({approve:true})
+    };
+    await f.engine.implement('task',{id:'builder1',name:'そら'});
+    assert.equal(f.store.get('task').status,'pr_ready');
+    const post = f.sent.at(-1).text;
+    assert.match(post,/変更とテストが完了しました。PR #43/);
+    assert.match(post,/変わること:\n- ボタンの位置が揃う/);
+    assert.match(post,/未確認の点:\n- スマホ幅の見た目は未確認/);
+    assert.match(post,/本番で確認をお願いしたい点:\n- 実機で表示を確認/);
+  } finally { f.close(); }
+});
+
+test('an investigation with no code changes completes with a report instead of failing', async () => {
+  const f = fixture();
+  try {
+    f.store.create('mystery','アバターが黒くなる');
+    f.store.update('mystery',{status:'queued',summary:'見る人によって黒く表示される',criteria:JSON.stringify(['原因を特定する'])});
+    f.store.setKv('investigation:mystery','1');
+    let published = false;
+    f.engine.git = {
+      ...f.engine.git,
+      prepare:async () => {}, issue:async () => 9,
+      resumeTaskWorktree:async () => null,
+      worktree:async () => ({path:f.dir,branch:'agent/mystery'}),
+      reviewDiff:async () => '',
+      restoreChangelog:async () => [],
+      test:async () => {},
+      hasChanges:async () => false,
+      commitPush:async () => { published = true; },
+      findPr:async () => null,
+      pr:async () => { published = true; return 50; },
+      removeWorktree:async () => {}
+    };
+    f.engine.ai = {
+      code:async () => '調査報告: 画像の読み込み経路を確認し、仮説A（キャッシュ破損）は否定できました。次は表示側の証拠が必要です。\nUNVERIFIED_POINTS:\n- なし\nUSER_FACING_CHANGES:\n- なし',
+      ask:async () => ({approve:true})
+    };
+    await f.engine.implement('mystery',{id:'builder1',name:'そら'});
+    assert.equal(published,false);
+    assert.equal(f.store.get('mystery').status,'waiting_info');
+    const post = f.sent.at(-1).text;
+    assert.match(post,/調査をしました。今回はコードの変更はありません。/);
+    assert.match(post,/仮説A（キャッシュ破損）は否定できました/);
+    assert.ok(f.store.events().some(event => event.kind === 'investigation'));
+  } finally { f.close(); }
+});
+
+test('planning stores production checks and the investigation flag from PM', async () => {
+  const f = fixture();
+  try {
+    f.store.create('big','大きな変更');
+    f.engine.ai = { ask: async (_role, prompt) => {
+      if (prompt.includes('開発案件として判断')) return { verdict:'implement', purpose:'目的', summary:'背景', criteria:['自動で確認できる'], productionChecks:['実機で表示を確認'], investigation:true, implementationTask:'調査して直す' };
+      if (prompt.includes('開発リードとして')) return { task:'作業指示' };
+      throw new Error(`unexpected prompt: ${prompt.slice(0, 40)}`);
+    } };
+    await f.engine.plan('big','投稿内容');
+    assert.deepEqual(f.engine.productionChecks('big'), ['実機で表示を確認']);
+    assert.equal(f.engine.investigation('big'), true);
+    assert.match(f.sent.at(-1).text, /本番で確認: 実機で表示を確認/);
+  } finally { f.close(); }
+});
+
 test('PM reviews a stopped ticket and requeues its saved worktree', async () => {
   const f = fixture();
   try {
@@ -692,14 +776,17 @@ test('shrinking the pool while busy never reassigns a removed role to a waiting 
     // 稼働中に聞き取りを1人へ縮小する（管理画面の人数変更と同じく roles を差し替える）
     replaceRoles(roles.filter(role => role.job !== '聞き取り' || role.id === 'intake'));
     f.engine.reconcileRoles();
+    // 担当者はランダムに選ばれるため、「残るロール」と「消えるロール」を実物で特定する
+    const survivor = assigned.find(role => role.id === 'intake');
+    const removed = assigned.find(role => role.id !== 'intake');
     assert.equal(f.engine.roleBusy.has('intake'), true);
-    assert.equal(f.engine.roleBusy.has(assigned[1].id), false);
+    assert.equal(f.engine.roleBusy.has(removed.id), false);
     // 削除済みロールが解放されても、待機案件へそのロールは渡らない
-    f.engine.releaseRole(assigned[1]);
+    f.engine.releaseRole(removed);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(sixthRole, null);
     // 現行ロールが空いたら、待機案件はそのロールを受け取る
-    f.engine.releaseRole(assigned[0]);
+    f.engine.releaseRole(survivor);
     assert.equal((await sixth).id, 'intake');
     assert.equal(f.engine.roleBusy.get('intake'), 'ticket-6');
   } finally { replaceRoles(original); f.close(); }
