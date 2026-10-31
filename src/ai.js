@@ -58,7 +58,10 @@ export class AI {
     // 開発方針は対象リポジトリの版に合わせるため、作業コピーにあるものを読む
     const direction = cwd && !withoutPolicy.has(job) ? await readFile(join(cwd,'docs','direction.md'),'utf8').catch(() => '') : '';
     if (direction.trim()) parts.push(`# 対象リポジトリの開発方針（docs/direction.md）\n\n${direction.trim()}`);
-    // 人格プロンプトは Discord で話す呼び出し（speaking）のときだけ、最後に重ねる。
+    // 人格プロンプトは、発話文だけを整形する呼び出し（speaking）のときだけ最後に重ねる。
+    // 判断（verdict・受付可否・分類など）を含む呼び出しでは speaking を指定しないこと。
+    // 人格は character 権限で編集できる自由記述であり、判断基準より後ろに置くと
+    // 権限境界が自然言語の但し書き頼みになってしまうため、判断とは混ぜない（案B）。
     // メンバー ID で解決できた場合は personaId だけで引き、未割当なら人格なしにする
     if (speaking) {
       const resolvedById = Boolean(roleId && entry && entry.id === roleId);

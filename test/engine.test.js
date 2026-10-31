@@ -647,3 +647,57 @@ test('shrinking the pool while busy never reassigns a removed role to a waiting 
     assert.equal(f.engine.roleBusy.get('intake'), 'ticket-6');
   } finally { replaceRoles(original); f.close(); }
 });
+
+// 案B: 判断を含む呼び出しには人格プロンプトを混ぜない（speaking を渡さない）。
+// roleId（仕事の解決）は判断とは無関係なので従来どおり渡る
+test('intake judgment calls do not request persona (no speaking flag)', async () => {
+  const f = fixture();
+  try {
+    f.store.create('ticket-judge', '聞き取りの声');
+    let seen;
+    f.engine.ai = { ask: async (_role, _prompt, options) => { seen = options; return { ready: false, reply: 'もう少し教えてください', title: '件名', summary: '要約', criteria: [] }; } };
+    await f.engine.feedback('ticket-judge');
+    assert.equal(f.store.get('ticket-judge').status, 'waiting_info');
+    assert.equal(seen.speaking, undefined);
+    assert.match(seen.roleId, /^intake/);
+  } finally { f.close(); }
+});
+
+test('support classification calls do not request persona (no speaking flag)', async () => {
+  const f = fixture();
+  try {
+    f.store.create('ticket-support', '完了した対応');
+    f.store.update('ticket-support', { status: 'merged', last_message_id: 'm2', answered_message_id: 'm1' });
+    f.engine.discord.userMessage = async () => '使い方が分かりません';
+    let seen;
+    f.engine.ai = { ask: async (_role, _prompt, options) => { seen = options; return { action: 'answer', answer: 'こう使います', title: '', summary: '' }; } };
+    await f.engine.followUp('ticket-support');
+    assert.equal(seen.speaking, undefined);
+    assert.equal(seen.roleId, 'support');
+  } finally { f.close(); }
+});
+
+test('appeal classification calls do not request persona (no speaking flag)', async () => {
+  const f = fixture();
+  try {
+    f.store.create('ticket-appeal', '見送った対応');
+    f.store.update('ticket-appeal', { status: 'declined', last_message_id: 'm9', answered_message_id: 'm1' });
+    f.engine.discord.userMessage = async () => '承知しました';
+    let seen;
+    f.engine.ai = { ask: async (_role, _prompt, options) => { seen = options; return { action: 'none', reply: '' }; } };
+    await f.engine.appeal('ticket-appeal');
+    assert.equal(seen.speaking, undefined);
+    assert.equal(seen.roleId, 'pm');
+  } finally { f.close(); }
+});
+
+test('PM verdict calls do not request persona (no speaking flag)', async () => {
+  const f = fixture();
+  try {
+    let seen;
+    f.engine.ai = { ask: async (_role, _prompt, options) => { seen = options; return { verdict: 'implement' }; } };
+    await f.engine.pmReview({ id: 'ticket-pm', title: '件名' }, f.dir, []);
+    assert.equal(seen.speaking, undefined);
+    assert.equal(seen.roleId, 'pm');
+  } finally { f.close(); }
+});

@@ -289,7 +289,7 @@ export class Engine {
 ${context ? `前回までの対応: ${context}\n` : ''}${proposal ? `PM の提案（返答待ち）: ${proposal}\n` : ''}${addenda.length ? `追加の発言: ${JSON.stringify(addenda)}\n` : ''}会話:
 ${history}
 
-既存案件: ${JSON.stringify(similar)}`, { provider: this.config.intakeProvider, cwd: snapshot.path, repoReadOnly: true, speaking: true, roleId: intakeRole.id, images: [...(imageBundle?.paths || []),...(parentImageBundle?.paths || [])] });
+既存案件: ${JSON.stringify(similar)}`, { provider: this.config.intakeProvider, cwd: snapshot.path, repoReadOnly: true, roleId: intakeRole.id, images: [...(imageBundle?.paths || []),...(parentImageBundle?.paths || [])] });
       const purpose = trim(result.purpose,500);
       const update = { title: trim(result.title || ticket.title, 100), summary: trim(`${purpose ? `目的: ${purpose}\n` : ''}${result.summary || ''}`, 3000), criteria: JSON.stringify(asList(result.criteria)) };
       this.store.update(id, update);
@@ -358,7 +358,7 @@ ${history}
       snapshot = await this.git.snapshotWorktree(`support-${id}-${Date.now()}`,baseSha);
       const pr = ticket.pr_number ? await this.git.prDetails(ticket.pr_number).catch(() => null) : null;
       const context = await this.roundContext(id);
-      const result = await this.ai.ask(supportRole.name, `完了済みの Discord スレッドへの新しい発言を判断してください。現在の ${this.config.baseBranch || 'develop'} と関連 docs、PR 情報を読みます。実装の質問なら action="answer" として確認できたソースのパスを含む正確な説明を返します。新しい不具合・回帰・追加の改修依頼なら action="new_fix" とします。このスレッドで続けて対応するので、ここまでの会話と前回の対応を前提に、今回の依頼を title と summary にまとめます。再現手順など必要な情報が足りないなら action="clarify" として短く質問します。既に質問済みの内容を繰り返し聞かないでください。コード変更は不要です。返す JSON: {"action":"answer|new_fix|clarify","answer":"回答または確認質問","title":"今回の対応の短い件名","summary":"不具合や要望と期待結果の要約"}。\n\n今回の案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,pr:ticket.pr_number,round:ticket.round || 1})}\nPR情報: ${JSON.stringify(pr)}\n${context ? `前回までの対応: ${context}\n` : ''}最新の発言: ${JSON.stringify(question)}\n会話の文脈: ${history}`, {cwd:snapshot.path,repoReadOnly:true,speaking:true,roleId:supportRole.id});
+      const result = await this.ai.ask(supportRole.name, `完了済みの Discord スレッドへの新しい発言を判断してください。現在の ${this.config.baseBranch || 'develop'} と関連 docs、PR 情報を読みます。実装の質問なら action="answer" として確認できたソースのパスを含む正確な説明を返します。新しい不具合・回帰・追加の改修依頼なら action="new_fix" とします。このスレッドで続けて対応するので、ここまでの会話と前回の対応を前提に、今回の依頼を title と summary にまとめます。再現手順など必要な情報が足りないなら action="clarify" として短く質問します。既に質問済みの内容を繰り返し聞かないでください。コード変更は不要です。返す JSON: {"action":"answer|new_fix|clarify","answer":"回答または確認質問","title":"今回の対応の短い件名","summary":"不具合や要望と期待結果の要約"}。\n\n今回の案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,pr:ticket.pr_number,round:ticket.round || 1})}\nPR情報: ${JSON.stringify(pr)}\n${context ? `前回までの対応: ${context}\n` : ''}最新の発言: ${JSON.stringify(question)}\n会話の文脈: ${history}`, {cwd:snapshot.path,repoReadOnly:true,roleId:supportRole.id});
       if (result.action === 'new_fix') {
         const previousPr = ticket.pr_number;
         this.startRound(id,messageId,result);
@@ -403,7 +403,7 @@ ${history}
       if (!text) return;
       role = await this.acquireRole('PM',id);
       const reason = this.store.getKv(`decline:${id}`) || '';
-      const result = await this.ai.ask(role.name, `見送った案件のスレッドに新しい発言がありました。見送りへの異議・再検討の依頼なら action="appeal"、見送り理由を受けて別の形の依頼に変えたものなら action="revise"、了承やお礼など対応が要らないなら action="none" にします。返す JSON: {"action":"appeal|revise|none","reply":"ユーザーへの短い返信"}。\n\n案件: ${ticket.title}\n見送り理由: ${reason}\n新しい発言: ${JSON.stringify(text)}`, {provider:this.config.intakeProvider || 'codex',cwd:this.config.repo,repoReadOnly:true,timeoutMs:2*60_000,speaking:true,roleId:role.id});
+      const result = await this.ai.ask(role.name, `見送った案件のスレッドに新しい発言がありました。見送りへの異議・再検討の依頼なら action="appeal"、見送り理由を受けて別の形の依頼に変えたものなら action="revise"、了承やお礼など対応が要らないなら action="none" にします。返す JSON: {"action":"appeal|revise|none","reply":"ユーザーへの短い返信"}。\n\n案件: ${ticket.title}\n見送り理由: ${reason}\n新しい発言: ${JSON.stringify(text)}`, {provider:this.config.intakeProvider || 'codex',cwd:this.config.repo,repoReadOnly:true,timeoutMs:2*60_000,roleId:role.id});
       this.store.update(id,{answered_message_id:messageId});
       if (result.action === 'revise') {
         this.store.update(id,{status:'intake'});
@@ -444,7 +444,7 @@ ${history}
 返す JSON: {"verdict":"implement|propose|decline|decision","duplicateOf":"既存IDまたは空文字","purpose":"推定した目的","reason":"判断理由","proposal":"提案または代案","decisionQuestion":"判断すべき内容と選択肢","title":"短い件名","summary":"背景と期待結果","criteria":["観測可能な受け入れ条件"],"implementationTask":"実装担当への具体的な指示"}。
 
 現案件: ${JSON.stringify(input)}
-既存案件: ${JSON.stringify(candidates)}`, {cwd,repoReadOnly:true,speaking:true,roleId:'pm'});
+既存案件: ${JSON.stringify(candidates)}`, {cwd,repoReadOnly:true,roleId:'pm'});
   }
   async plan(id, history, decisionAnswer = '', { cwd = '', proposal = '', appeal = false } = {}) {
     let snapshot;
