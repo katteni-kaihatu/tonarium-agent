@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { roles } from './config.js';
 
@@ -9,6 +10,20 @@ export class Dashboard {
   constructor(config, store, engine, root, admin = null) {
     Object.assign(this, { config, store, engine, root, admin });
     this.clients = new Set();
+  }
+  // アイコン画像の版数。管理画面で差し替えたファイル（.data/avatars 優先、無ければ
+  // public/avatars）を stat し、サイズと更新時刻を版数にする。ブラウザは版数付き
+  // URL で取得するので、差し替えると URL が変わり、古いキャッシュが表示され続けない。
+  avatarVersion(role) {
+    const filename = `${role.avatarId || role.id}.png`;
+    if (!/^[a-zA-Z0-9_-]+\.png$/.test(filename)) return '';
+    for (const candidate of [join(this.root, '.data', 'avatars', filename), join(this.root, 'public', 'avatars', filename)]) {
+      try {
+        const stat = statSync(candidate);
+        if (stat.isFile()) return `${stat.size}-${Math.round(stat.mtimeMs)}`;
+      } catch { /* 次の候補へ */ }
+    }
+    return '';
   }
   state() {
     const tickets = this.store.list().map(row => ({ ...row, criteria: JSON.parse(row.criteria || '[]') }));
@@ -20,8 +35,9 @@ export class Dashboard {
       roles: roles.map(role => {
         const status = { pm:['planning','decision'], integrator:['integrating'], release:['pr_ready'] }[role.id];
         const assigned = this.engine.roleBusy.get(role.id);
-        if (role.id === 'mainrelease') return { ...role, ticket: this.store.getKv('main-release:status') || '' };
-        return { ...role, ticket: tickets.find(ticket => ticket.id === assigned || ticket.worker === role.id)?.title || tickets.find(ticket => status?.includes(ticket.status))?.title || (role.id === 'release' && this.engine.releasing ? 'PR を確認・マージ中' : '') };
+        const avatarVersion = this.avatarVersion(role);
+        if (role.id === 'mainrelease') return { ...role, avatarVersion, ticket: this.store.getKv('main-release:status') || '' };
+        return { ...role, avatarVersion, ticket: tickets.find(ticket => ticket.id === assigned || ticket.worker === role.id)?.title || tickets.find(ticket => status?.includes(ticket.status))?.title || (role.id === 'release' && this.engine.releasing ? 'PR を確認・マージ中' : '') };
       }),
       tickets,
       events: this.store.events(),

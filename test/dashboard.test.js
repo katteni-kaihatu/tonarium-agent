@@ -20,6 +20,15 @@ test('top page declares the Misskey redirect_uri for the configured public origi
   } finally { await dashboard.stop(); }
 });
 
+test('state carries an avatar version for roles whose icon file exists', () => {
+  const config = { ...getConfig({}), host: '127.0.0.1', port: 0 };
+  const dashboard = new Dashboard(config, stubStore, stubEngine, root);
+  const state = dashboard.state();
+  const pm = state.roles.find(role => role.id === 'pm');
+  assert.match(pm.avatarVersion, /^\d+-\d+$/);
+  assert.equal(dashboard.avatarVersion({ id: 'no-such-member' }), '');
+});
+
 test('top page has no redirect_uri declaration while ADMIN_PUBLIC_URL is unset', async () => {
   const config = { ...getConfig({}), host: '127.0.0.1', port: 0 };
   const dashboard = new Dashboard(config, stubStore, stubEngine, root);
