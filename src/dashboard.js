@@ -58,7 +58,15 @@ export class Dashboard {
       const file = path === '/' ? 'index.html' : path.slice(1);
       if (!['index.html','style.css','app.js'].includes(file)) { response.writeHead(404); response.end('Not found'); return; }
       try {
-        const content = await readFile(join(this.root, 'public', file));
+        let content = await readFile(join(this.root, 'public', file));
+        // Misskey は OAuth の client_id（公開オリジンのトップページ）を読みに来て、
+        // redirect_uri の link タグが宣言されているかを確認する。無いと認可が
+        // "Invalid redirect_uri" で失敗する（tonarium 本体の __ORIGIN__ 置換と同じ仕組み）。
+        // ADMIN_PUBLIC_URL が固定値なので、配信時にそのオリジンで差し込む。
+        if (file === 'index.html' && this.config.adminPublicUrl) {
+          const link = `<link rel="redirect_uri" href="${this.config.adminPublicUrl}/admin/auth/callback" />`;
+          content = Buffer.from(content.toString('utf8').replace('</head>', `${link}</head>`));
+        }
         response.writeHead(200, { 'Content-Type': types[extname(file)], 'Cache-Control':'no-cache', 'X-Content-Type-Options':'nosniff' });
         response.end(content);
       } catch { response.writeHead(500); response.end('Dashboard unavailable'); }
