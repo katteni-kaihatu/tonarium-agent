@@ -50,7 +50,7 @@ export class AdminConsole {
     } catch { response.writeHead(500); response.end('Admin page unavailable'); }
   }
 
-  async serveAvatar(response, filename, request = null) {
+  async serveAvatar(response, filename, request = null, version = '') {
     if (!/^[a-zA-Z0-9_-]+\.png$/.test(filename)) { response.writeHead(404); response.end('Not found'); return; }
     for (const candidate of [join(this.dataRoot, 'avatars', filename), join(this.publicRoot, 'public', 'avatars', filename)]) {
       try {
@@ -58,12 +58,17 @@ export class AdminConsole {
         if (!info.isFile()) continue;
         // 検証子（ETag / Last-Modified）を付けて no-cache の再検証が正しく効くようにする。
         // 検証子が無いとブラウザが手元の古い画像を使い続ける場合がある。
-        const etag = `"${info.size}-${Math.round(info.mtimeMs)}"`;
-        const headers = { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache', ETag: etag, 'Last-Modified': info.mtime.toUTCString(), 'X-Content-Type-Options': 'nosniff' };
+        const versionValue = `${info.size}-${Math.round(info.mtimeMs)}`;
+        const etag = `"${versionValue}"`;
+        // 版数付き URL（ダッシュボードの ?v=）は中身が版数で一意に決まるので長くキャッシュしてよい。
+        // 版数が現在のファイルと一致しない場合は通常の再検証に戻す。
+        const cacheControl = version && version === versionValue ? 'public, max-age=31536000, immutable' : 'no-cache';
+        const headers = { 'Content-Type': 'image/png', 'Cache-Control': cacheControl, ETag: etag, 'Last-Modified': info.mtime.toUTCString(), 'X-Content-Type-Options': 'nosniff' };
         const ifNoneMatch = request?.headers?.['if-none-match'];
         const ifModifiedSince = request?.headers?.['if-modified-since'];
+        const etagCandidates = ifNoneMatch ? ifNoneMatch.split(',').map(value => value.trim().replace(/^W\//, '')) : [];
         const fresh = ifNoneMatch
-          ? ifNoneMatch.split(',').map(value => value.trim()).includes(etag)
+          ? etagCandidates.includes(etag) || etagCandidates.includes('*')
           : ifModifiedSince && !Number.isNaN(Date.parse(ifModifiedSince)) && Math.floor(info.mtimeMs / 1000) <= Math.floor(Date.parse(ifModifiedSince) / 1000);
         if (fresh) { response.writeHead(304, headers); response.end(); return; }
         const content = await readFile(candidate);
@@ -93,7 +98,7 @@ export class AdminConsole {
       return true;
     }
     if (path === '/admin/auth/callback') { await this.auth.handleCallback(request, response, url); return true; }
-    if (path.startsWith('/avatars/')) { await this.serveAvatar(response, path.slice('/avatars/'.length), request); return true; }
+    if (path.startsWith('/avatars/')) { await this.serveAvatar(response, path.slice('/avatars/'.length), request, url.searchParams.get('v') || ''); return true; }
     if (path.startsWith('/api/admin/')) { await this.api(request, response, url); return true; }
     return false;
   }

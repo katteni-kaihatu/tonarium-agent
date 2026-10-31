@@ -48,6 +48,20 @@ test('serveAvatar answers 304 when If-None-Match matches the current icon', asyn
   assert.equal(second.body, null);
 });
 
+test('serveAvatar serves a versioned URL as immutable only when the version matches', async () => {
+  const admin = await setup();
+  const plain = mockResponse();
+  await admin.serveAvatar(plain, 'custom.png', { headers: {} });
+  const version = plain.headers.ETag.replaceAll('"', '');
+  const versioned = mockResponse();
+  await admin.serveAvatar(versioned, 'custom.png', { headers: {} }, version);
+  assert.equal(versioned.status, 200);
+  assert.match(versioned.headers['Cache-Control'], /immutable/);
+  const stale = mockResponse();
+  await admin.serveAvatar(stale, 'custom.png', { headers: {} }, '0-0');
+  assert.equal(stale.headers['Cache-Control'], 'no-cache');
+});
+
 test('serveAvatar falls back to the bundled icon and rejects bad names', async () => {
   const admin = await setup();
   const response = mockResponse();
