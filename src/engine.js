@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { SnowflakeUtil } from 'discord.js';
 import { userFacingChanges } from './ai.js';
-import { decisionUserIds, isDecisionUser } from './settings.js';
+import { decisionUserIds, isDecisionUser, customizedMemberIds } from './settings.js';
 
 const roleName = id => roles.find(role => role.id === id)?.name || id;
 const asList = value => Array.isArray(value) ? value.map(String).filter(Boolean) : [];
@@ -31,6 +31,26 @@ export class Engine {
     this.timer = null;
     this.threadStatusUpdates = new Map();
     this.deferRounds = false;
+    this.random = Math.random;
+  }
+  // 担当者選びの優先順: デフォルトから変わっているメンバーを先に、
+  // 各グループの中はランダム。一人目に固定で寄らないようにするための並び
+  prioritizedRoles(job) {
+    const all = roles.filter(role => role.job === job);
+    let changed = new Set();
+    try { changed = customizedMemberIds(this.store); } catch { changed = new Set(); }
+    const shuffle = list => {
+      const copy = [...list];
+      for (let i = copy.length - 1; i > 0; i--) {
+        const j = Math.floor(this.random() * (i + 1));
+        [copy[i], copy[j]] = [copy[j], copy[i]];
+      }
+      return copy;
+    };
+    return [...shuffle(all.filter(role => changed.has(role.id))), ...shuffle(all.filter(role => !changed.has(role.id)))];
+  }
+  pickFreeRole(job) {
+    return this.prioritizedRoles(job).find(role => !this.roleBusy.has(role.id)) || null;
   }
   event(id, actor, kind, text) {
     this.store.event(id, roleName(actor), kind, text);
@@ -55,7 +75,7 @@ export class Engine {
   async acquireRole(job, ticketId) {
     const candidates = roles.filter(role => role.job === job);
     if (!candidates.length) throw new Error(`No ${job} agent is configured`);
-    const free = candidates.find(role => !this.roleBusy.has(role.id));
+    const free = this.pickFreeRole(job);
     if (!free) return new Promise(resolve => {
       const queue = this.roleWaiters.get(job) || [];
       queue.push({ ticketId, resolve });
@@ -76,7 +96,7 @@ export class Engine {
     const queue = this.roleWaiters.get(job);
     if (!queue) return;
     while (queue.length) {
-      const free = roles.filter(role => role.job === job).find(role => !this.roleBusy.has(role.id));
+      const free = this.pickFreeRole(job);
       if (!free) break;
       const next = queue.shift();
       this.roleBusy.set(free.id,next.ticketId);
@@ -570,7 +590,7 @@ ${history}
         if (this.pendingFeedback.delete(failed.id)) queueMicrotask(() => this.receive(failed.id));
       });
     }
-    for (const worker of roles.filter(role => role.job === '実装').slice(0, this.config.maxWorkers)) {
+    for (const worker of this.prioritizedRoles('実装').slice(0, this.config.maxWorkers)) {
       if (this.busyWorkers.has(worker.id)) continue;
       const ticket = this.store.byStatus(['queued']).find(row => !this.active.has(row.id));
       if (!ticket) continue;

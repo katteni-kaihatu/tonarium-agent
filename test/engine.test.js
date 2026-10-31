@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import { Engine } from '../src/engine.js';
 import { replaceRoles, roles } from '../src/config.js';
+import { getPersonas, setPersonas } from '../src/settings.js';
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(),'tonarium-engine-'));
@@ -313,6 +314,38 @@ test('intake assignments use five distinct agents and queue the sixth', async ()
     assert.equal((await sixth).id,assigned[0].id);
     assert.equal(f.engine.roleBusy.get(assigned[0].id),'ticket-6');
     for (const role of assigned) f.engine.releaseRole(role);
+  } finally { f.close(); }
+});
+
+test('role assignment prefers members changed from the default, randomly within that group', async () => {
+  const f = fixture();
+  try {
+    // intake2 と intake4 の人格を改名して「デフォルトから変わっている」状態にする
+    setPersonas(f.store, getPersonas(f.store).map(persona => (persona.id === 'intake2' || persona.id === 'intake4') ? { ...persona, name:`改名${persona.id}` } : persona));
+    // 乱数が上限寄りならグループの先頭、0 ならシャッフルで入れ替わった先頭が選ばれる
+    f.engine.random = () => 0.999;
+    const first = await f.engine.acquireRole('聞き取り','ticket-a');
+    assert.equal(first.id,'intake2');
+    f.engine.releaseRole(first);
+    f.engine.random = () => 0;
+    const second = await f.engine.acquireRole('聞き取り','ticket-b');
+    assert.equal(second.id,'intake4');
+    f.engine.releaseRole(second);
+    // 変わっている人が全員使用中なら、それ以外から選ぶ
+    const busyA = await f.engine.acquireRole('聞き取り','ticket-c');
+    const busyB = await f.engine.acquireRole('聞き取り','ticket-d');
+    assert.deepEqual(new Set([busyA.id,busyB.id]), new Set(['intake2','intake4']));
+    const fallback = await f.engine.acquireRole('聞き取り','ticket-e');
+    assert.equal(fallback.job,'聞き取り');
+    assert.ok(!['intake2','intake4'].includes(fallback.id));
+  } finally { f.close(); }
+});
+
+test('role assignment is random among unchanged members when nobody is customized', async () => {
+  const f = fixture();
+  try {
+    f.engine.random = () => 0.999;
+    assert.equal((await f.engine.acquireRole('聞き取り','ticket-a')).id,'intake');
   } finally { f.close(); }
 });
 
