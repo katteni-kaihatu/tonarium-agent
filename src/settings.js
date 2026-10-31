@@ -100,6 +100,23 @@ export function getMembers(store) {
   return seed;
 }
 
+// 「デフォルトから変わっている」メンバーの集合。担当者選びで優先するために使う:
+// - 人格の割り当てが種の既定（自分と同じ ID の人格）と違う
+// - 割り当てられた人格が新規作成されたもの、既定から改名されたもの、
+//   または人格プロンプトが設定されたもの
+export function customizedMemberIds(store) {
+  const personas = getPersonas(store);
+  const defaultName = id => DEFAULT_ROLES.find(role => role.id === id)?.name;
+  const changed = new Set();
+  for (const member of getMembers(store)) {
+    if (member.personaId && member.personaId !== member.id) { changed.add(member.id); continue; }
+    const persona = personas.find(entry => entry.id === member.personaId);
+    if (!persona) continue;
+    if (defaultName(persona.id) === undefined || persona.name !== defaultName(persona.id) || String(persona.prompt || '').trim()) changed.add(member.id);
+  }
+  return changed;
+}
+
 const jobRule = job => JOB_RULES.find(rule => rule.job === job);
 
 export function setMembers(store, members) {
