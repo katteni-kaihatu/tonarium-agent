@@ -115,7 +115,7 @@ OpenAI API 翻訳は [Responses API の Structured Outputs](https://developers.o
 
 ## 管理画面
 
-`/admin` から開けます。認証は `MISSKEY_ORIGIN`（既定 `https://misskey.resonite.love`）の Misskey アカウントで、OAuth 2.0 認可コード＋PKCE（tonarium 本体と同じ方式）を使います。Misskey が戻り先を確認するため、公開オリジン（`ADMIN_PUBLIC_URL`）の設定が必須です（未設定だと管理画面ログインは無効になります。リクエストの転送ヘッダーからオリジンを決めることはしません）。`.env` の `INITIAL_ADMIN_MISSKEY_IDS`（カンマ区切り、Misskey で確認できる ID）に登録した人は常に全権限を持ち、管理画面からは権限を外せません。
+`/admin` から開けます。認証は `MISSKEY_ORIGIN`（既定 `https://misskey.resonite.love`）の Misskey アカウントで、OAuth 2.0 認可コード＋PKCE（tonarium 本体と同じ方式）を使います。Misskey は認可時に client_id（公開オリジンのトップページ）を読み、`redirect_uri` の link タグで戻り先が宣言されているかを確認するため、公開オリジン（`ADMIN_PUBLIC_URL`）の設定が必須です（トップページの配信時にそのオリジンで link タグを差し込みます）（未設定だと管理画面ログインは無効になります。リクエストの転送ヘッダーからオリジンを決めることはしません）。`.env` の `INITIAL_ADMIN_MISSKEY_IDS`（カンマ区切り、Misskey で確認できる ID）に登録した人は常に全権限を持ち、管理画面からは権限を外せません。
 
 権限は3種類です。実効権限は「ベース権限＋その人の管理者レコードの権限」で、初期管理者は常に全権限です。
 
