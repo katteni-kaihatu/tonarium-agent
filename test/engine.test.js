@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import { Engine } from '../src/engine.js';
+import { replaceRoles, roles } from '../src/config.js';
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(),'tonarium-engine-'));
@@ -622,4 +623,27 @@ test('release keeps merging when the review agent is unavailable', async () => {
     assert.equal(f.store.get('ticket').status,'merged');
     assert.ok(f.store.events().some(event => event.kind === 'selection_warning'));
   } finally { f.close(); }
+});
+
+test('shrinking the pool while busy never reassigns a removed role to a waiting ticket', async () => {
+  const f = fixture();
+  const original = roles.map(role => ({ ...role }));
+  try {
+    const assigned = await Promise.all(Array.from({ length: 5 }, (_, index) => f.engine.acquireRole('聞き取り', `ticket-${index}`)));
+    let sixthRole = null;
+    const sixth = f.engine.acquireRole('聞き取り', 'ticket-6').then(role => { sixthRole = role; return role; });
+    // 稼働中に聞き取りを1人へ縮小する（管理画面の人数変更と同じく roles を差し替える）
+    replaceRoles(roles.filter(role => role.job !== '聞き取り' || role.id === 'intake'));
+    f.engine.reconcileRoles();
+    assert.equal(f.engine.roleBusy.has('intake'), true);
+    assert.equal(f.engine.roleBusy.has(assigned[1].id), false);
+    // 削除済みロールが解放されても、待機案件へそのロールは渡らない
+    f.engine.releaseRole(assigned[1]);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(sixthRole, null);
+    // 現行ロールが空いたら、待機案件はそのロールを受け取る
+    f.engine.releaseRole(assigned[0]);
+    assert.equal((await sixth).id, 'intake');
+    assert.equal(f.engine.roleBusy.get('intake'), 'ticket-6');
+  } finally { replaceRoles(original); f.close(); }
 });

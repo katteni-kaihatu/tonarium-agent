@@ -97,6 +97,7 @@ export class Store {
   }
   releases() { return this.db.prepare('SELECT * FROM releases ORDER BY id DESC LIMIT 20').all(); }
   getKv(key) { return this.db.prepare('SELECT value FROM kv WHERE key=?').get(key)?.value; }
+  listKv(prefix) { return this.db.prepare('SELECT key,value FROM kv WHERE key LIKE ? ORDER BY key ASC').all(`${prefix}%`); }
   setKv(key,value) { this.db.prepare('INSERT INTO kv (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,String(value)); }
   deleteKv(key) { this.db.prepare('DELETE FROM kv WHERE key=?').run(key); }
   listAdmins() { return this.db.prepare('SELECT * FROM admin_users ORDER BY created_at ASC').all(); }

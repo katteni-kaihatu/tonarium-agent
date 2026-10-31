@@ -66,11 +66,30 @@ export class Engine {
     return free;
   }
   releaseRole(role) {
-    const next = this.roleWaiters.get(role.job)?.shift();
-    if (next) {
-      this.roleBusy.set(role.id,next.ticketId);
-      next.resolve(role);
-    } else this.roleBusy.delete(role.id);
+    this.roleBusy.delete(role.id);
+    // 解放されたロールが人数変更で消えていたら、そのロールは二度と渡さない。
+    // 待機案件には現在のメンバーの空きロールを割り直す
+    this.serveWaiters(role.job);
+    this.onChange();
+  }
+  serveWaiters(job) {
+    const queue = this.roleWaiters.get(job);
+    if (!queue) return;
+    while (queue.length) {
+      const free = roles.filter(role => role.job === job).find(role => !this.roleBusy.has(role.id));
+      if (!free) break;
+      const next = queue.shift();
+      this.roleBusy.set(free.id,next.ticketId);
+      next.resolve(free);
+    }
+    if (!queue.length) this.roleWaiters.delete(job);
+  }
+  // 管理画面でメンバーが差し替わった直後に呼ぶ。消えたロールの使用中印を落とし、
+  // 待機案件を現在の空きロールへ割り直す（稼働中の担当そのものは止めない）
+  reconcileRoles() {
+    const valid = new Set(roles.map(role => role.id));
+    for (const id of [...this.roleBusy.keys()]) if (!valid.has(id)) this.roleBusy.delete(id);
+    for (const job of [...this.roleWaiters.keys()]) this.serveWaiters(job);
     this.onChange();
   }
   // 返事を待って止まるときだけ相手に通知し、進捗報告では通知しない

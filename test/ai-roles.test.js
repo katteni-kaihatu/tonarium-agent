@@ -28,3 +28,24 @@ test('guidance resolves the job by member id when persona names collide across j
     replaceRoles(original);
   }
 });
+
+// メンバー ID で解決できた呼び出しでは、人格の解決が strict（personaId のみ）になること
+test('guidance marks the persona lookup strict only when the member id resolves', async () => {
+  const original = roles.map(role => ({ ...role }));
+  try {
+    replaceRoles([
+      { id: 'builder1', name: 'そら', job: '実装', color: 'blue', personaId: null, avatarId: 'builder1' },
+      { id: 'builder2', name: 'ゆず', job: '実装', color: 'blue', personaId: 'builder2', avatarId: 'builder2' }
+    ]);
+    const seen = [];
+    const ai = new AI({}, undefined, {
+      personaPrompt: (personaId, name, options) => { seen.push({ personaId, options }); return ''; }
+    });
+    await ai.guidance('そら', { speaking: true, roleId: 'builder1' });
+    assert.deepEqual(seen[0], { personaId: null, options: { strict: true } });
+    await ai.guidance('ゆず', { speaking: true });
+    assert.deepEqual(seen[1], { personaId: 'builder2', options: { strict: false } });
+  } finally {
+    replaceRoles(original);
+  }
+});

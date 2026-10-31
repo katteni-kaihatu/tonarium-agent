@@ -8,7 +8,7 @@ import {
   PERMISSIONS, sanitizePermissions, basePermissions, setBasePermissions, effectivePermissions,
   decisionUserIds, setDecisionUserIds, isDecisionUser,
   getPersonas, setPersonas, getMembers, resizeMembers, assignPersona, resolvedRoles,
-  getPromptOverride, setPromptOverride, clearPromptOverride
+  getPromptOverride, setPromptOverride, clearPromptOverride, aiHooks
 } from '../src/settings.js';
 
 function fixture() {
@@ -148,5 +148,21 @@ test('prompt overrides can be set, read and cleared, and reject unknown files', 
     assert.throws(() => setPromptOverride(f.store, 'prompts/nope.md', 'x'), /unknown prompt file/);
     assert.throws(() => setPromptOverride(f.store, 'prompts/pm.md', '   '), /must not be empty/);
     assert.throws(() => clearPromptOverride(f.store, 'nope.md'), /unknown prompt file/);
+  } finally { f.close(); }
+});
+
+test('aiHooks personaPrompt never falls back to a same-named persona in strict mode', () => {
+  const f = fixture();
+  try {
+    // builder1 の人格名は「そら」。同じ名前の別人格を用意する
+    const personas = getPersonas(f.store).map(persona => persona.id === 'builder1' ? { ...persona, prompt: '本来の人格' } : persona);
+    setPersonas(f.store, [...personas, { id: 'persona-same-name', name: 'そら', prompt: '別人格の文' }]);
+    const hooks = aiHooks(f.store);
+    assert.equal(hooks.personaPrompt('builder1', 'そら', { strict: true }), '本来の人格');
+    // 未割当（null）や不明な ID を strict で引くと、同名の別人格へ寄せず空になる
+    assert.equal(hooks.personaPrompt(null, 'そら', { strict: true }), '');
+    assert.equal(hooks.personaPrompt('missing-id', 'そら', { strict: true }), '');
+    // 従来（ID 解決をしていない）呼び出しでは名前フォールバックが残る
+    assert.equal(hooks.personaPrompt(null, 'そら'), '本来の人格');
   } finally { f.close(); }
 });

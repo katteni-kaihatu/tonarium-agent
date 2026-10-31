@@ -30,7 +30,8 @@ const engine = new Engine(config,store,ai,git,discord,() => dashboard?.notify())
 const adminConsole = new AdminConsole(config, store, auth, {
   dataRoot: join(root,'.data'),
   publicRoot: root,
-  onChange: () => dashboard?.notify()
+  // メンバー構成が変わったら、稼働中エンジンのロール使用状況も追随させる
+  onChange: () => { engine.reconcileRoles(); dashboard?.notify(); }
 });
 dashboard = new Dashboard(config,store,engine,root,adminConsole);
 

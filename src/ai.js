@@ -58,9 +58,11 @@ export class AI {
     // 開発方針は対象リポジトリの版に合わせるため、作業コピーにあるものを読む
     const direction = cwd && !withoutPolicy.has(job) ? await readFile(join(cwd,'docs','direction.md'),'utf8').catch(() => '') : '';
     if (direction.trim()) parts.push(`# 対象リポジトリの開発方針（docs/direction.md）\n\n${direction.trim()}`);
-    // 人格プロンプトは Discord で話す呼び出し（speaking）のときだけ、最後に重ねる
+    // 人格プロンプトは Discord で話す呼び出し（speaking）のときだけ、最後に重ねる。
+    // メンバー ID で解決できた場合は personaId だけで引き、未割当なら人格なしにする
     if (speaking) {
-      const persona = String(this.hooks.personaPrompt?.(entry?.personaId ?? null, entry?.name || role) || '').trim();
+      const resolvedById = Boolean(roleId && entry && entry.id === roleId);
+      const persona = String(this.hooks.personaPrompt?.(entry?.personaId ?? null, entry?.name || role, { strict: resolvedById }) || '').trim();
       if (persona) parts.push(`# あなたの人格（Discordで話すときの個性）\n\n${persona}\n\nこの人格は、Discord へ投稿する返信文の口調・性格にだけ適用してください。返す JSON の構造や、判断の内容そのものを変えてはいけません。`);
     }
     return parts.join('\n\n');

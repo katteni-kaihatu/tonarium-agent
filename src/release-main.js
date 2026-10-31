@@ -10,7 +10,7 @@ import { MainRelease } from './main-release.js';
 import { syncThreadStatus } from './thread-status.js';
 import { acquireLock } from './lock.js';
 import { Poster, setAvatarBaseUrl } from './poster.js';
-import { applySettings, aiHooks } from './settings.js';
+import { applySettings, aiHooks, decisionUserIds } from './settings.js';
 
 const dryRun = process.argv.includes('--dry-run');
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -30,7 +30,7 @@ const translator = new Translator(config,ai,root);
 const rest = config.discordToken ? new REST({version:'10'}).setToken(config.discordToken) : null;
 async function notify(text, { mention = false } = {}) {
   if (dryRun || !rest || !config.releaseChannelId) return;
-  await new Poster(rest,translator).say(config.releaseChannelId,text,{as:'mainrelease',mentionUserId:mention ? config.decisionMentionId : ''});
+  await new Poster(rest,translator).say(config.releaseChannelId,text,{as:'mainrelease',mentionUserIds:mention ? decisionUserIds(store, config) : []});
 }
 
 try {

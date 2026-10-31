@@ -225,13 +225,18 @@ export function clearPromptOverride(store, file) {
   store.setKv('prompt_overrides', JSON.stringify(overrides));
 }
 
-// AI へ渡すフック一式。人格プロンプトは人格 ID で引く（名前は重複しうるため、名前は予備）
+// AI へ渡すフック一式。人格プロンプトは人格 ID で引く（名前は重複しうるため、名前は予備）。
+// strict（メンバー ID で解決できた呼び出し）では personaId が正本で、未割当（null）や
+// 見つからない ID のときに同名の別人格へ寄せない。名前フォールバックは ID 解決を
+// していない従来の呼び出しだけに残す
 export function aiHooks(store) {
   return {
-    personaPrompt: (personaId, name) => {
+    personaPrompt: (personaId, name, { strict = false } = {}) => {
       const personas = getPersonas(store);
-      return personas.find(persona => persona.id === personaId)?.prompt
-        || personas.find(persona => persona.name === name)?.prompt || '';
+      const byId = personaId ? personas.find(persona => persona.id === personaId) : undefined;
+      if (byId) return byId.prompt;
+      if (strict) return '';
+      return personas.find(persona => persona.name === name)?.prompt || '';
     },
     promptOverride: file => getPromptOverride(store, file)
   };

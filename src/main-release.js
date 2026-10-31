@@ -184,7 +184,7 @@ export class MainRelease {
 返す JSON: {"entries":[{"slug":"camera-timer","title":"短い見出し","items":["利用者から見た変更"],"tag":"任意","units":["u1"]}]}
 
 直近の履歴: ${JSON.stringify(await this.recent(path))}
-変更: ${JSON.stringify(units)}`, {provider:this.config.planningProvider,cwd:path,repoReadOnly:true,timeoutMs:10 * 60_000});
+変更: ${JSON.stringify(units)}`, {provider:this.config.planningProvider,cwd:path,repoReadOnly:true,timeoutMs:10 * 60_000,roleId:'mainrelease'});
       return normalizeEntries(raw,units);
     } catch (error) {
       this.store.event(null,roleName('mainrelease'),'changelog_fallback',trim(`変更履歴の生成に失敗したため、PR のタイトルと記載から作成: ${error.message}`,500));

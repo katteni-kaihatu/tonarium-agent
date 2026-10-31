@@ -68,8 +68,16 @@ export class AdminConsole {
     if (path === '/admin' || path === '/admin/') { await this.servePublic(response, 'admin.html', 'text/html; charset=utf-8'); return true; }
     if (path === '/admin.js') { await this.servePublic(response, 'admin.js', 'text/javascript; charset=utf-8'); return true; }
     if (path === '/admin/login') {
-      response.writeHead(302, { Location: this.auth.loginUrl(request), 'Cache-Control': 'no-store' });
-      response.end();
+      try {
+        const { url, cookie } = this.auth.beginLogin(request);
+        response.writeHead(302, { Location: url, 'Set-Cookie': cookie, 'Cache-Control': 'no-store' });
+        response.end();
+      } catch (error) {
+        const limited = error.code === 'RATE_LIMITED';
+        if (!limited && error.code !== 'ADMIN_DISABLED') console.error('Admin login failed:', error);
+        response.writeHead(limited ? 429 : 503, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+        response.end(limited ? 'ログイン試行が多すぎます。しばらく待ってからお試しください。\n' : '管理画面ログインは無効です（ADMIN_PUBLIC_URL が未設定です）。\n');
+      }
       return true;
     }
     if (path === '/admin/auth/callback') { await this.auth.handleCallback(request, response, url); return true; }
@@ -85,7 +93,7 @@ export class AdminConsole {
     if (!user) return sendJson(response, 401, { error: 'unauthorized' });
     if (method !== 'GET') {
       const origin = request.headers.origin;
-      if (origin && origin !== this.auth.publicOrigin(request)) return sendJson(response, 403, { error: 'origin mismatch' });
+      if (origin && origin !== this.auth.publicOrigin()) return sendJson(response, 403, { error: 'origin mismatch' });
     }
     const permissions = effectivePermissions(this.store, this.config, user.misskeyId);
     const has = permission => permissions.includes(permission);
