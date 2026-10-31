@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Poster } from '../src/poster.js';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Poster, roleIdentity, setAvatarRoot } from '../src/poster.js';
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const ID1 = '111111111111111111';
 const ID2 = '222222222222222222';
@@ -25,6 +29,17 @@ test('say mentions every decision user and allows exactly those mentions', async
   assert.ok(message);
   assert.ok(message.options.body.content.startsWith(`<@${ID1}> <@${ID2}> `));
   assert.deepEqual(message.options.body.allowed_mentions, { users: [ID1, ID2] });
+});
+
+test('roleIdentity adds the icon file version to the Discord avatar URL once a root is set', () => {
+  // ルート未設定（単体利用）では従来どおり版数なし
+  assert.match(roleIdentity('pm').avatarURL, /\/avatars\/pm\.png$/);
+  setAvatarRoot(root);
+  try {
+    // public/avatars/pm.png が同梱されているので版数が付く（Discord の URL 単位キャッシュを回避する）
+    assert.match(roleIdentity('pm').avatarURL, /\/avatars\/pm\.png\?v=\d+-\d+$/);
+    assert.match(roleIdentity('mainrelease').avatarURL, /\/avatars\/mainrelease\.png\?v=\d+-\d+$/);
+  } finally { setAvatarRoot(''); }
 });
 
 test('say keeps the single mentionUserId form working', async () => {

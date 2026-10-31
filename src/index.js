@@ -11,7 +11,7 @@ import { Dashboard } from './dashboard.js';
 import { AdminAuth } from './auth.js';
 import { AdminConsole } from './admin.js';
 import { applySettings, aiHooks } from './settings.js';
-import { setAvatarBaseUrl, setSpeechPolisher } from './poster.js';
+import { setAvatarBaseUrl, setSpeechPolisher, setAvatarRoot } from './poster.js';
 import { SpeechPolisher } from './speech.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -23,6 +23,7 @@ const ai = new AI(config, root, aiHooks(store));
 // メンバー/人格の設定を roles へ反映してから各部品を作る
 applySettings(store, config);
 setAvatarBaseUrl(`${config.adminPublicUrl || 'https://tonarium-agent.kokopi.me'}/avatars`);
+setAvatarRoot(root);
 setSpeechPolisher(new SpeechPolisher(ai, aiHooks(store), { cwd: root }));
 const git = new GitHub(config,root);
 const translator = new Translator(config,ai,root);

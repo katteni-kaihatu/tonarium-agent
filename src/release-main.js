@@ -9,7 +9,7 @@ import { Translator } from './translation.js';
 import { MainRelease } from './main-release.js';
 import { syncThreadStatus } from './thread-status.js';
 import { acquireLock } from './lock.js';
-import { Poster, setAvatarBaseUrl, setSpeechPolisher } from './poster.js';
+import { Poster, setAvatarBaseUrl, setSpeechPolisher, setAvatarRoot } from './poster.js';
 import { SpeechPolisher } from './speech.js';
 import { applySettings, aiHooks, decisionUserIds } from './settings.js';
 
@@ -25,6 +25,7 @@ if (!lock) {
 }
 applySettings(store, config);
 setAvatarBaseUrl(`${config.adminPublicUrl || 'https://tonarium-agent.kokopi.me'}/avatars`);
+setAvatarRoot(root);
 const ai = new AI(config, root, aiHooks(store));
 setSpeechPolisher(new SpeechPolisher(ai, aiHooks(store), { cwd: root }));
 const git = new GitHub(config,root);

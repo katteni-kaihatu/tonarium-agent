@@ -1,4 +1,6 @@
 import { Routes, escapeMarkdown } from 'discord.js';
+import { statSync } from 'node:fs';
+import { join } from 'node:path';
 import { roles } from './config.js';
 import { translationLines, withTranslations } from './translation.js';
 
@@ -17,12 +19,34 @@ export function setSpeechPolisher(polisher) {
   speechPolisher = polisher || null;
   return speechPolisher;
 }
+// アイコンの版数を引くためのルート。Discord は avatar_url の画像を自前 CDN に
+// URL 単位でキャッシュし、同じ URL のままでは差し替えても取り直さない。
+// そのため Discord 向け URL にはファイルの版数（サイズ＋更新時刻）を付け、
+// 差し替え＝別 URL になるようにする。ルート未設定なら版数なし（従来どおり）
+export let avatarRoot = '';
+export function setAvatarRoot(root) {
+  avatarRoot = root ? String(root) : '';
+  return avatarRoot;
+}
+export function avatarVersionFor(filename) {
+  if (!avatarRoot || !/^[a-zA-Z0-9_-]+\.png$/.test(filename)) return '';
+  for (const candidate of [join(avatarRoot, '.data', 'avatars', filename), join(avatarRoot, 'public', 'avatars', filename)]) {
+    try {
+      const stat = statSync(candidate);
+      if (stat.isFile()) return `${stat.size}-${Math.round(stat.mtimeMs)}`;
+    } catch { /* 次の候補へ */ }
+  }
+  return '';
+}
 const threadTypes = new Set([10,11,12]);
 const retryAfterMs = 10 * 60_000;
 
 export function roleIdentity(id) {
   const role = roles.find(entry => entry.id === id);
-  return role ? { username:`${role.name}｜${role.job}`, avatarURL:`${avatarBaseUrl}/${role.avatarId || role.id}.png`, roleId: role.id, personaId: role.personaId ?? null, name: role.name } : null;
+  if (!role) return null;
+  const filename = `${role.avatarId || role.id}.png`;
+  const version = avatarVersionFor(filename);
+  return { username:`${role.name}｜${role.job}`, avatarURL:`${avatarBaseUrl}/${filename}${version ? `?v=${version}` : ''}`, roleId: role.id, personaId: role.personaId ?? null, name: role.name };
 }
 
 export function chunk(text, limit = 1900) {
