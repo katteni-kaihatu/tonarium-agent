@@ -9,7 +9,8 @@ import { Translator } from './translation.js';
 import { MainRelease } from './main-release.js';
 import { syncThreadStatus } from './thread-status.js';
 import { acquireLock } from './lock.js';
-import { Poster, setAvatarBaseUrl } from './poster.js';
+import { Poster, setAvatarBaseUrl, setSpeechPolisher } from './poster.js';
+import { SpeechPolisher } from './speech.js';
 import { applySettings, aiHooks, decisionUserIds } from './settings.js';
 
 const dryRun = process.argv.includes('--dry-run');
@@ -25,6 +26,7 @@ if (!lock) {
 applySettings(store, config);
 setAvatarBaseUrl(`${config.adminPublicUrl || 'https://tonarium-agent.kokopi.me'}/avatars`);
 const ai = new AI(config, root, aiHooks(store));
+setSpeechPolisher(new SpeechPolisher(ai, aiHooks(store), { cwd: root }));
 const git = new GitHub(config,root);
 const translator = new Translator(config,ai,root);
 const rest = config.discordToken ? new REST({version:'10'}).setToken(config.discordToken) : null;
