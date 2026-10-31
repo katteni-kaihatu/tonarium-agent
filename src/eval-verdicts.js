@@ -4,6 +4,7 @@ import { getConfig } from './config.js';
 import { Store } from './store.js';
 import { AI } from './ai.js';
 import { Engine } from './engine.js';
+import { applySettings, aiHooks } from './settings.js';
 
 // 保存済みの案件に今の指示で PM の判定だけをやり直し、結果を表示する。案件・Discord・GitHub には書き込まない
 const limit = Number(process.argv[2]) || 10;
@@ -11,7 +12,8 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const config = getConfig();
 const store = new Store(join(root,'.data','state.sqlite'));
 try {
-  const engine = new Engine(config,store,new AI(config),null,{});
+  applySettings(store, config);
+  const engine = new Engine(config,store,new AI(config, root, aiHooks(store)),null,{});
   const tickets = store.list().filter(ticket => ticket.summary).slice(0,limit);
   for (const ticket of tickets) {
     try {

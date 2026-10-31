@@ -3,14 +3,19 @@ import { roles } from './config.js';
 import { translationLines, withTranslations } from './translation.js';
 
 export const webhookNames = { agent:'Tonarium Agent', translation:'Tonarium Agent 通訳' };
-// リポジトリは公開なので、Discord が取得できる GitHub の配信 URL を使う
-export const avatarBaseUrl = 'https://raw.githubusercontent.com/katteni-kaihatu/tonarium-agent/main/public/avatars';
+// アイコンは管理画面で差し替えられるよう、ダッシュボード自身が /avatars/ で配信する。
+// Discord は Webhook の avatar_url を投稿ごとに取得するので、push なしで反映される
+export let avatarBaseUrl = 'https://tonarium-agent.kokopi.me/avatars';
+export function setAvatarBaseUrl(url) {
+  if (url) avatarBaseUrl = String(url).replace(/\/+$/,'');
+  return avatarBaseUrl;
+}
 const threadTypes = new Set([10,11,12]);
 const retryAfterMs = 10 * 60_000;
 
 export function roleIdentity(id) {
   const role = roles.find(entry => entry.id === id);
-  return role ? { username:`${role.name}｜${role.job}`, avatarURL:`${avatarBaseUrl}/${role.id}.png` } : null;
+  return role ? { username:`${role.name}｜${role.job}`, avatarURL:`${avatarBaseUrl}/${role.avatarId || role.id}.png` } : null;
 }
 
 export function chunk(text, limit = 1900) {
@@ -20,6 +25,14 @@ export function chunk(text, limit = 1900) {
 }
 
 export const discordId = value => /^\d{17,20}$/.test(String(value || '')) ? String(value) : '';
+
+// 単一指定（mentionUserId）と複数指定（mentionUserIds）をまとめて有効な ID の配列にする
+const mentionIds = (single, list) => [...new Set([single, ...(Array.isArray(list) ? list : [])].map(discordId).filter(Boolean))];
+// 本文に実際に含まれるメンションだけを通知対象にする
+const allowedMentions = (ids, part) => {
+  const users = ids.filter(id => part.includes(`<@${id}>`));
+  return users.length ? { users } : { parse: [] };
+};
 
 // 担当と参加者の翻訳を、それぞれの名前とアイコンで投稿する。Webhook を使えない環境では Bot 本人の投稿に戻す
 export class Poster {
@@ -74,7 +87,8 @@ export class Poster {
       return {agent:hooks.ids?.agent || new Set(),translation:hooks.ids?.translation || new Set()};
     } catch { return {agent:new Set(),translation:new Set()}; }
   }
-  async execute(channelId, kind, content, { username, avatarURL, mentionUserId = '' }) {
+  async execute(channelId, kind, content, { username, avatarURL, mentionUserId = '', mentionUserIds = [] }) {
+    const ids = mentionIds(mentionUserId, mentionUserIds);
     const {parentId,threadId} = await this.target(channelId);
     const hook = (await this.webhooks(parentId,true))[kind];
     if (!hook) return false;
@@ -84,22 +98,23 @@ export class Poster {
         await this.rest.post(Routes.webhook(hook.id,hook.token),{
           auth:false,
           query:new URLSearchParams(threadId ? {thread_id:threadId,wait:'true'} : {wait:'true'}),
-          body:{content:part,username:username.slice(0,80),avatar_url:avatarURL,allowed_mentions:mentionUserId && part.includes(`<@${mentionUserId}>`) ? {users:[mentionUserId]} : {parse:[]}}
+          body:{content:part,username:username.slice(0,80),avatar_url:avatarURL,allowed_mentions:allowedMentions(ids,part)}
         });
       } catch (error) {
         // 消された Webhook は次の投稿で作り直す
         if (error.status === 404 || error.code === 10015) this.hooks.delete(parentId);
         if (index === 0) throw error;
         // 途中まで投稿済みなら、全文を Bot で送り直すと重複するので残りだけ送る
-        await this.raw(channelId,parts.slice(index).join(''),mentionUserId);
+        await this.raw(channelId,parts.slice(index).join(''),ids);
         return true;
       }
     }
     return true;
   }
-  async raw(channelId, content, mentionUserId = '') {
+  async raw(channelId, content, mention = '') {
+    const ids = mentionIds('', Array.isArray(mention) ? mention : [mention]);
     for (const part of chunk(content)) {
-      await this.rest.post(Routes.channelMessages(channelId),{body:{content:part,allowed_mentions:mentionUserId && part.includes(`<@${mentionUserId}>`) ? {users:[mentionUserId]} : {parse:[]}}});
+      await this.rest.post(Routes.channelMessages(channelId),{body:{content:part,allowed_mentions:allowedMentions(ids,part)}});
     }
   }
   async translate(text) {
@@ -107,15 +122,16 @@ export class Poster {
     try { return await this.translator.translate(text); }
     catch (error) { console.error('Translation failed:',error); return null; }
   }
-  async say(channelId, text, { as = '', mentionUserId = '' } = {}) {
-    const mention = discordId(mentionUserId) ? `<@${mentionUserId}> ` : '';
+  async say(channelId, text, { as = '', mentionUserId = '', mentionUserIds = [] } = {}) {
+    const ids = mentionIds(mentionUserId, mentionUserIds);
+    const mention = ids.length ? `${ids.map(id => `<@${id}>`).join(' ')} ` : '';
     const body = withTranslations(text,await this.translate(text));
     const identity = roleIdentity(as);
     if (identity) {
-      try { if (await this.execute(channelId,'agent',mention + body,{...identity,mentionUserId})) return; }
+      try { if (await this.execute(channelId,'agent',mention + body,{...identity,mentionUserIds:ids})) return; }
       catch (error) { console.error('Webhook post failed; posting as the bot:',error.message); }
     }
-    await this.raw(channelId,`${mention}${identity ? `**${identity.username}**\n` : ''}${body}`,mentionUserId);
+    await this.raw(channelId,`${mention}${identity ? `**${identity.username}**\n` : ''}${body}`,ids);
   }
   async relay(channelId, text, { username, avatarURL }) {
     const lines = translationLines(text,await this.translate(text));

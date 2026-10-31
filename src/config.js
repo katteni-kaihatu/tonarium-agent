@@ -18,6 +18,25 @@ let customNames = {};
 try { customNames = JSON.parse(process.env.TONARIUM_TEAM_NAMES || '{}'); } catch { /* keep defaults */ }
 export const roles = defaultRoles.map(role => ({ ...role, name: typeof customNames[role.id] === 'string' ? customNames[role.id].slice(0,20) : role.name }));
 
+// 仕事の内容は固定。人数だけが管理画面から変更できる。locked の仕事は engine が
+// 個別 ID 前提で参照するため人数固定（min=max=1）。
+export const JOB_RULES = [
+  { job:'聞き取り', prefix:'intake', color:'mint', locked:false, min:1, max:10 },
+  { job:'PM', prefix:'pm', color:'rose', locked:true, min:1, max:1 },
+  { job:'開発リード', prefix:'lead', color:'blue', locked:false, min:1, max:10 },
+  { job:'実装', prefix:'builder', color:'blue', locked:false, min:1, max:15 },
+  { job:'実装案内', prefix:'support', color:'mint', locked:true, min:1, max:1 },
+  { job:'統合', prefix:'integrator', color:'violet', locked:true, min:1, max:1 },
+  { job:'出荷', prefix:'release', color:'gold', locked:true, min:1, max:1 },
+  { job:'リリース', prefix:'mainrelease', color:'gold', locked:true, min:1, max:1 }
+];
+
+// 既存の import 先がすべて同じ配列を見ているので、中身を差し替えて一斉に反映する
+export function replaceRoles(next) {
+  roles.splice(0, roles.length, ...next);
+  return roles;
+}
+
 export function getConfig(env = process.env) {
   return {
     discordToken: env.DISCORD_TOKEN || '',
@@ -47,6 +66,9 @@ export function getConfig(env = process.env) {
     batchMs: nonNegativeNumber(env.RELEASE_BATCH_MINUTES, 0) * 60_000,
     checksTimeoutMs: number(env.CHECKS_TIMEOUT_MINUTES || env.RELEASE_TIMEOUT_MINUTES, 20) * 60_000,
     requiredPrCheck: env.REQUIRED_PR_CHECK || 'web',
-    autoRelease: env.AUTO_RELEASE !== 'false'
+    autoRelease: env.AUTO_RELEASE !== 'false',
+    misskeyOrigin: (env.MISSKEY_ORIGIN || 'https://misskey.resonite.love').replace(/\/+$/,''),
+    initialAdminMisskeyIds: String(env.INITIAL_ADMIN_MISSKEY_IDS || '').split(',').map(value => value.trim()).filter(Boolean),
+    adminPublicUrl: (env.ADMIN_PUBLIC_URL || '').replace(/\/+$/,'')
   };
 }

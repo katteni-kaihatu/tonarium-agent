@@ -6,8 +6,8 @@ import { roles } from './config.js';
 const types = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.svg':'image/svg+xml' };
 
 export class Dashboard {
-  constructor(config, store, engine, root) {
-    Object.assign(this, { config, store, engine, root });
+  constructor(config, store, engine, root, admin = null) {
+    Object.assign(this, { config, store, engine, root, admin });
     this.clients = new Set();
   }
   state() {
@@ -36,7 +36,13 @@ export class Dashboard {
   }
   async start() {
     this.server = createServer(async (request, response) => {
-      const path = new URL(request.url, `http://${request.headers.host}`).pathname;
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      const path = url.pathname;
+      // 管理画面・管理API・アバター配信は AdminConsole が担当する（認証はそちら側）
+      if (this.admin && (path.startsWith('/admin') || path.startsWith('/api/admin/') || path.startsWith('/avatars/'))) {
+        try { if (await this.admin.handle(request, response, url)) return; }
+        catch (error) { console.error('Admin console error:', error); if (!response.headersSent) { response.writeHead(500); response.end('Admin unavailable'); } return; }
+      }
       if (path === '/api/state') {
         response.writeHead(200, { 'Content-Type':'application/json; charset=utf-8', 'Cache-Control':'no-store' });
         response.end(JSON.stringify(this.state()));

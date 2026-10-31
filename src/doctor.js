@@ -15,6 +15,9 @@ const checks = [
   ['GitHub release branch', Boolean(config.baseBranch), config.baseBranch],
   ['Main release', true, config.mainReleaseIntervalMs ? `${config.baseBranch} → ${config.mainBranch} every ${config.mainReleaseIntervalMs / 60_000} minutes` : 'disabled']
 ];
+checks.push(['Misskey origin (admin login)', Boolean(config.misskeyOrigin), config.misskeyOrigin || 'MISSKEY_ORIGIN']);
+checks.push(['Initial admin Misskey IDs', config.initialAdminMisskeyIds.length > 0, config.initialAdminMisskeyIds.length ? `${config.initialAdminMisskeyIds.length} configured (INITIAL_ADMIN_MISSKEY_IDS)` : 'INITIAL_ADMIN_MISSKEY_IDS is empty; the admin console will have no initial admin']);
+checks.push(['Admin public URL', true, config.adminPublicUrl || 'ADMIN_PUBLIC_URL is empty; admin login is disabled (the public dashboard still works)']);
 try {
   for (const role of [...roles,{name:'通訳'}]) await ai.guidance(role.name);
   await ai.guidance('設計レビュー',{guide:'review'});

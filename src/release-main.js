@@ -9,7 +9,8 @@ import { Translator } from './translation.js';
 import { MainRelease } from './main-release.js';
 import { syncThreadStatus } from './thread-status.js';
 import { acquireLock } from './lock.js';
-import { Poster } from './poster.js';
+import { Poster, setAvatarBaseUrl } from './poster.js';
+import { applySettings, aiHooks, decisionUserIds } from './settings.js';
 
 const dryRun = process.argv.includes('--dry-run');
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -21,13 +22,15 @@ if (!lock) {
   store.close();
   process.exit(0);
 }
-const ai = new AI(config);
+applySettings(store, config);
+setAvatarBaseUrl(`${config.adminPublicUrl || 'https://tonarium-agent.kokopi.me'}/avatars`);
+const ai = new AI(config, root, aiHooks(store));
 const git = new GitHub(config,root);
 const translator = new Translator(config,ai,root);
 const rest = config.discordToken ? new REST({version:'10'}).setToken(config.discordToken) : null;
 async function notify(text, { mention = false } = {}) {
   if (dryRun || !rest || !config.releaseChannelId) return;
-  await new Poster(rest,translator).say(config.releaseChannelId,text,{as:'mainrelease',mentionUserId:mention ? config.decisionMentionId : ''});
+  await new Poster(rest,translator).say(config.releaseChannelId,text,{as:'mainrelease',mentionUserIds:mention ? decisionUserIds(store, config) : []});
 }
 
 try {

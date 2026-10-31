@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.js';
 import { Engine } from '../src/engine.js';
+import { replaceRoles, roles } from '../src/config.js';
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(),'tonarium-engine-'));
@@ -621,5 +622,82 @@ test('release keeps merging when the review agent is unavailable', async () => {
     assert.equal(await f.engine.release(true),true);
     assert.equal(f.store.get('ticket').status,'merged');
     assert.ok(f.store.events().some(event => event.kind === 'selection_warning'));
+  } finally { f.close(); }
+});
+
+test('shrinking the pool while busy never reassigns a removed role to a waiting ticket', async () => {
+  const f = fixture();
+  const original = roles.map(role => ({ ...role }));
+  try {
+    const assigned = await Promise.all(Array.from({ length: 5 }, (_, index) => f.engine.acquireRole('聞き取り', `ticket-${index}`)));
+    let sixthRole = null;
+    const sixth = f.engine.acquireRole('聞き取り', 'ticket-6').then(role => { sixthRole = role; return role; });
+    // 稼働中に聞き取りを1人へ縮小する（管理画面の人数変更と同じく roles を差し替える）
+    replaceRoles(roles.filter(role => role.job !== '聞き取り' || role.id === 'intake'));
+    f.engine.reconcileRoles();
+    assert.equal(f.engine.roleBusy.has('intake'), true);
+    assert.equal(f.engine.roleBusy.has(assigned[1].id), false);
+    // 削除済みロールが解放されても、待機案件へそのロールは渡らない
+    f.engine.releaseRole(assigned[1]);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(sixthRole, null);
+    // 現行ロールが空いたら、待機案件はそのロールを受け取る
+    f.engine.releaseRole(assigned[0]);
+    assert.equal((await sixth).id, 'intake');
+    assert.equal(f.engine.roleBusy.get('intake'), 'ticket-6');
+  } finally { replaceRoles(original); f.close(); }
+});
+
+// 案B: 判断を含む呼び出しには人格プロンプトを混ぜない（speaking を渡さない）。
+// roleId（仕事の解決）は判断とは無関係なので従来どおり渡る
+test('intake judgment calls do not request persona (no speaking flag)', async () => {
+  const f = fixture();
+  try {
+    f.store.create('ticket-judge', '聞き取りの声');
+    let seen;
+    f.engine.ai = { ask: async (_role, _prompt, options) => { seen = options; return { ready: false, reply: 'もう少し教えてください', title: '件名', summary: '要約', criteria: [] }; } };
+    await f.engine.feedback('ticket-judge');
+    assert.equal(f.store.get('ticket-judge').status, 'waiting_info');
+    assert.equal(seen.speaking, undefined);
+    assert.match(seen.roleId, /^intake/);
+  } finally { f.close(); }
+});
+
+test('support classification calls do not request persona (no speaking flag)', async () => {
+  const f = fixture();
+  try {
+    f.store.create('ticket-support', '完了した対応');
+    f.store.update('ticket-support', { status: 'merged', last_message_id: 'm2', answered_message_id: 'm1' });
+    f.engine.discord.userMessage = async () => '使い方が分かりません';
+    let seen;
+    f.engine.ai = { ask: async (_role, _prompt, options) => { seen = options; return { action: 'answer', answer: 'こう使います', title: '', summary: '' }; } };
+    await f.engine.followUp('ticket-support');
+    assert.equal(seen.speaking, undefined);
+    assert.equal(seen.roleId, 'support');
+  } finally { f.close(); }
+});
+
+test('appeal classification calls do not request persona (no speaking flag)', async () => {
+  const f = fixture();
+  try {
+    f.store.create('ticket-appeal', '見送った対応');
+    f.store.update('ticket-appeal', { status: 'declined', last_message_id: 'm9', answered_message_id: 'm1' });
+    f.engine.discord.userMessage = async () => '承知しました';
+    let seen;
+    f.engine.ai = { ask: async (_role, _prompt, options) => { seen = options; return { action: 'none', reply: '' }; } };
+    await f.engine.appeal('ticket-appeal');
+    assert.equal(seen.speaking, undefined);
+    assert.equal(seen.roleId, 'pm');
+  } finally { f.close(); }
+});
+
+test('PM verdict calls do not request persona (no speaking flag)', async () => {
+  const f = fixture();
+  try {
+    let seen;
+    f.engine.ai = { ask: async (_role, _prompt, options) => { seen = options; return { verdict: 'implement' }; } };
+    await f.engine.pmReview({ id: 'ticket-pm', title: '件名' }, f.dir, []);
+    assert.equal(seen.speaking, undefined);
+    assert.equal(seen.roleId, 'pm');
   } finally { f.close(); }
 });
