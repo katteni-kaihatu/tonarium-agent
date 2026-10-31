@@ -1,4 +1,4 @@
-import { readFile, writeFile, copyFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, copyFile, mkdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -50,12 +50,24 @@ export class AdminConsole {
     } catch { response.writeHead(500); response.end('Admin page unavailable'); }
   }
 
-  async serveAvatar(response, filename) {
+  async serveAvatar(response, filename, request = null) {
     if (!/^[a-zA-Z0-9_-]+\.png$/.test(filename)) { response.writeHead(404); response.end('Not found'); return; }
     for (const candidate of [join(this.dataRoot, 'avatars', filename), join(this.publicRoot, 'public', 'avatars', filename)]) {
       try {
+        const info = await stat(candidate);
+        if (!info.isFile()) continue;
+        // 検証子（ETag / Last-Modified）を付けて no-cache の再検証が正しく効くようにする。
+        // 検証子が無いとブラウザが手元の古い画像を使い続ける場合がある。
+        const etag = `"${info.size}-${Math.round(info.mtimeMs)}"`;
+        const headers = { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache', ETag: etag, 'Last-Modified': info.mtime.toUTCString(), 'X-Content-Type-Options': 'nosniff' };
+        const ifNoneMatch = request?.headers?.['if-none-match'];
+        const ifModifiedSince = request?.headers?.['if-modified-since'];
+        const fresh = ifNoneMatch
+          ? ifNoneMatch.split(',').map(value => value.trim()).includes(etag)
+          : ifModifiedSince && !Number.isNaN(Date.parse(ifModifiedSince)) && Math.floor(info.mtimeMs / 1000) <= Math.floor(Date.parse(ifModifiedSince) / 1000);
+        if (fresh) { response.writeHead(304, headers); response.end(); return; }
         const content = await readFile(candidate);
-        response.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+        response.writeHead(200, headers);
         response.end(content);
         return;
       } catch { /* 次の候補へ */ }
@@ -81,7 +93,7 @@ export class AdminConsole {
       return true;
     }
     if (path === '/admin/auth/callback') { await this.auth.handleCallback(request, response, url); return true; }
-    if (path.startsWith('/avatars/')) { await this.serveAvatar(response, path.slice('/avatars/'.length)); return true; }
+    if (path.startsWith('/avatars/')) { await this.serveAvatar(response, path.slice('/avatars/'.length), request); return true; }
     if (path.startsWith('/api/admin/')) { await this.api(request, response, url); return true; }
     return false;
   }
