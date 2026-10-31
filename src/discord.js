@@ -1,10 +1,40 @@
 import { Client, GatewayIntentBits, ChannelType } from 'discord.js';
 import { Poster } from './poster.js';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { syncThreadStatus } from './thread-status.js';
 import { decisionUserIds } from './settings.js';
+
+const execFileAsync = promisify(execFile);
+// 画像の視覚入力は寸法でコストが決まるため、大きな画像は渡す前に縮小して節約する。
+// 変換は外部ツール（ImageMagick → ffmpeg の順で探す）に頼り、無い環境や失敗時は
+// 原寸のまま渡す（節約はベストエフォートで、聞き取り自体は止めない）
+const RESIZE_THRESHOLD_BYTES = 300 * 1024;
+const RESIZE_MAX_EDGE = 1568;
+let resizerPromise = null;
+function detectResizer() {
+  if (!resizerPromise) resizerPromise = (async () => {
+    for (const command of ['magick', 'ffmpeg']) {
+      try { await execFileAsync(command, ['-version'], { timeout: 5_000 }); return command; }
+      catch { /* 次の候補へ */ }
+    }
+    return '';
+  })();
+  return resizerPromise;
+}
+async function resizedCopy(inputPath, outputPath) {
+  const tool = await detectResizer();
+  if (!tool) return false;
+  try {
+    if (tool === 'magick') await execFileAsync('magick', [inputPath, '-resize', `${RESIZE_MAX_EDGE}x${RESIZE_MAX_EDGE}>`, '-quality', '82', outputPath], { timeout: 20_000 });
+    else await execFileAsync('ffmpeg', ['-y', '-loglevel', 'error', '-i', inputPath, '-vf', `scale='min(${RESIZE_MAX_EDGE},iw)':'min(${RESIZE_MAX_EDGE},ih)':force_original_aspect_ratio=decrease`, '-q:v', '3', outputPath], { timeout: 20_000 });
+    const result = await stat(outputPath).catch(() => null);
+    return Boolean(result?.size);
+  } catch { return false; }
+}
 
 const legacyTranslationBlock = '\n\n🌐 **翻訳 / Translations / 번역**';
 const translationBlock = /\n\n(?=(?:🇯🇵|🇺🇸|🇰🇷) )/u;
@@ -135,7 +165,15 @@ export class DiscordTransport {
         if (!png && !jpeg) continue;
         const path = join(dir,`image-${paths.length+1}.${png ? 'png' : 'jpg'}`);
         await writeFile(path,bytes);
-        paths.push(path);
+        let finalPath = path;
+        if (bytes.length > RESIZE_THRESHOLD_BYTES) {
+          const smallPath = join(dir,`image-${paths.length+1}-small.jpg`);
+          if (await resizedCopy(path, smallPath)) {
+            const small = await stat(smallPath).catch(() => null);
+            if (small && small.size < bytes.length) finalPath = smallPath;
+          }
+        }
+        paths.push(finalPath);
       } catch (error) { console.error('Could not fetch Discord image:',error.message); }
     }
     return {paths,cleanup:() => rm(dir,{recursive:true,force:true})};

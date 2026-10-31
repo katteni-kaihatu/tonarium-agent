@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { Store } from '../src/store.js';
 import { DiscordTransport, historyLine } from '../src/discord.js';
 import { Poster } from '../src/poster.js';
@@ -139,6 +141,29 @@ test('Discord PNG attachments are downloaded for the intake vision input and cle
     assert.deepEqual(readFileSync(bundle.paths[0]),Buffer.from(png));
     await bundle.cleanup();
     assert.equal(existsSync(bundle.paths[0]),false);
+    transport.client.destroy();
+  } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('large attachments are resized before being handed to the vision input when a converter exists', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(),'tonarium-discord-'));
+  const store = new Store(join(dir,'state.sqlite'));
+  try {
+    // 2400x2400 のノイズ画像（300KB を超える実 PNG）を ffmpeg で作る。無い環境では skip
+    const bigPath = join(dir,'big.png');
+    try { await promisify(execFile)('ffmpeg', ['-y','-loglevel','error','-f','lavfi','-i','testsrc2=size=2400x2400:duration=1','-frames:v','1',bigPath], { timeout: 30_000 }); }
+    catch { t.skip('ffmpeg is not available'); return; }
+    const png = readFileSync(bigPath);
+    if (png.length <= 300 * 1024) { t.skip('generated image is too small'); return; }
+    const fetcher = async () => ({ok:true,headers:{get:() => String(png.length)},arrayBuffer:async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength)});
+    const transport = new DiscordTransport({},store,null,fetcher);
+    const message = {author:{bot:false},createdTimestamp:1,attachments:new Map([['image',{url:'https://cdn.discordapp.com/attachments/1/2/big.png',size:png.length,contentType:'image/png'}]])};
+    transport.client.channels.fetch = async () => ({messages:{fetch:async () => new Map([['message',message]])},fetchStarterMessage:async () => null});
+    const bundle = await transport.downloadImages('thread');
+    assert.equal(bundle.paths.length,1);
+    assert.match(bundle.paths[0],/-small\.jpg$/);
+    assert.ok(readFileSync(bundle.paths[0]).length < png.length, '縮小版のほうが小さい');
+    await bundle.cleanup();
     transport.client.destroy();
   } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
 });
