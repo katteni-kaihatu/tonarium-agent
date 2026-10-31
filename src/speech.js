@@ -54,7 +54,11 @@ export class SpeechPolisher {
     if (!source.trim()) return source;
     const persona = this.personaFor(role);
     if (!persona) return source;
-    const key = `${role.personaId || role.roleId || role.name || ''}\n${source}`;
+    // キャッシュのキーには人格プロンプトのハッシュも含める（管理画面で人格を
+    // 編集したら、再起動なしでも新しい口調で添削し直すため）
+    let personaHash = 0;
+    for (const char of persona) personaHash = (personaHash * 31 + char.codePointAt(0)) >>> 0;
+    const key = `${role.personaId || role.roleId || role.name || ''}:${personaHash}\n${source}`;
     if (this.cache.has(key)) return this.cache.get(key);
     let result = source;
     try {
