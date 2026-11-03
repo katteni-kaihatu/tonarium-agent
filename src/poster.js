@@ -118,19 +118,24 @@ export class Poster {
       return {agent:hooks.ids?.agent || new Set(),translation:hooks.ids?.translation || new Set()};
     } catch { return {agent:new Set(),translation:new Set()}; }
   }
-  async execute(channelId, kind, content, { username, avatarURL, mentionUserId = '', mentionUserIds = [] }) {
+  // 投稿できたら先頭パートのメッセージ ID を返す（リアクション転送などで原投稿と対応付けるため）。
+  // Webhook が使えず Bot 投稿に落ちた場合など ID が分からないときは true を返す
+  async execute(channelId, kind, content, { username, avatarURL, mentionUserId = '', mentionUserIds = [], embeds = [] }) {
     const ids = mentionIds(mentionUserId, mentionUserIds);
     const {parentId,threadId} = await this.target(channelId);
     const hook = (await this.webhooks(parentId,true))[kind];
     if (!hook) return false;
     const parts = chunk(content);
+    if (!parts.length && embeds.length) parts.push('');
+    let postedId = '';
     for (const [index,part] of parts.entries()) {
       try {
-        await this.rest.post(Routes.webhook(hook.id,hook.token),{
+        const posted = await this.rest.post(Routes.webhook(hook.id,hook.token),{
           auth:false,
           query:new URLSearchParams(threadId ? {thread_id:threadId,wait:'true'} : {wait:'true'}),
-          body:{content:part,username:username.slice(0,80),avatar_url:avatarURL,allowed_mentions:allowedMentions(ids,part)}
+          body:{...(part ? {content:part} : {}),...(index === 0 && embeds.length ? {embeds} : {}),username:username.slice(0,80),avatar_url:avatarURL,allowed_mentions:allowedMentions(ids,part)}
         });
+        if (index === 0 && posted?.id) postedId = String(posted.id);
       } catch (error) {
         // 消された Webhook は次の投稿で作り直す
         if (error.status === 404 || error.code === 10015) this.hooks.delete(parentId);
@@ -140,12 +145,14 @@ export class Poster {
         return true;
       }
     }
-    return true;
+    return postedId || true;
   }
-  async raw(channelId, content, mention = '') {
+  async raw(channelId, content, mention = '', embeds = []) {
     const ids = mentionIds('', Array.isArray(mention) ? mention : [mention]);
-    for (const part of chunk(content)) {
-      await this.rest.post(Routes.channelMessages(channelId),{body:{content:part,allowed_mentions:allowedMentions(ids,part)}});
+    const parts = chunk(content);
+    if (!parts.length && embeds.length) parts.push('');
+    for (const [index,part] of parts.entries()) {
+      await this.rest.post(Routes.channelMessages(channelId),{body:{...(part ? {content:part} : {}),...(index === 0 && embeds.length ? {embeds} : {}),allowed_mentions:allowedMentions(ids,part)}});
     }
   }
   async translate(text) {
@@ -173,9 +180,27 @@ export class Poster {
   }
   async relay(channelId, text, { username, avatarURL }) {
     const lines = translationLines(text,await this.translate(text));
-    if (!lines) return;
-    try { if (await this.execute(channelId,'translation',lines,{username,avatarURL})) return; }
+    if (!lines) return '';
+    try {
+      const posted = await this.execute(channelId,'translation',lines,{username,avatarURL});
+      if (posted) return posted === true ? '' : posted;
+    }
     catch (error) { console.error('Webhook post failed; posting as the bot:',error.message); }
     await this.raw(channelId,`🌐 **${escapeMarkdown(username)}**\n${lines}`);
+    return '';
+  }
+  // スタンプや単体の絵文字など、訳す本文が無い発言の見た目をそのまま移す。
+  // 移せる絵文字は原文のまま（content）、移せないものは画像（imageURL を Embed で表示）で送る
+  async relayVisual(channelId, { username, avatarURL, content = '', imageURL = '' }) {
+    if (!content && !imageURL) return '';
+    const embeds = imageURL ? [{image:{url:imageURL}}] : [];
+    try {
+      const posted = await this.execute(channelId,'translation',content,{username,avatarURL,embeds});
+      if (posted) return posted === true ? '' : posted;
+    }
+    catch (error) { console.error('Webhook post failed; posting as the bot:',error.message); }
+    const fallback = [content,imageURL].filter(Boolean).join('\n');
+    await this.raw(channelId,`🌐 **${escapeMarkdown(username)}**\n${fallback}`);
+    return '';
   }
 }

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Store } from '../src/store.js';
-import { DiscordTransport, historyLine } from '../src/discord.js';
+import { DiscordTransport, historyLine, standaloneVisual, stickerImageURL } from '../src/discord.js';
 import { Poster } from '../src/poster.js';
 
 test('a parent-channel message becomes one feedback thread', async () => {
@@ -237,4 +237,56 @@ test('instruction questions mention the starter and thread names show status emo
     assert.deepEqual(rest.posts[0].body.allowed_mentions,{users:['12345678901234567']});
     transport.client.destroy();
   } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('standalone visuals: stickers and single emojis are detected, text is not', () => {
+  const sticker = (format,extra = {}) => new Map([['s',{id:'123456789012345678',name:'wave',format,...extra}]]);
+  assert.equal(stickerImageURL({id:'123456789012345678',format:1}),'https://cdn.discordapp.com/stickers/123456789012345678.png');
+  assert.equal(stickerImageURL({id:'123456789012345678',format:4}),'https://cdn.discordapp.com/stickers/123456789012345678.gif');
+  assert.equal(stickerImageURL({id:'123456789012345678',format:3}),'https://media.discordapp.net/stickers/123456789012345678.png');
+  assert.deepEqual(standaloneVisual({content:'',stickers:sticker(2)}),{kind:'sticker',imageURL:'https://cdn.discordapp.com/stickers/123456789012345678.png',label:'wave'});
+  // 外部サーバーのカスタム絵文字はコードでは移せないので画像にする
+  assert.deepEqual(standaloneVisual({content:'<:party:123456789012345678>'}),{kind:'emoji',imageURL:'https://cdn.discordapp.com/emojis/123456789012345678.png',label:'party'});
+  assert.deepEqual(standaloneVisual({content:'<a:party:123456789012345678>'}),{kind:'emoji',imageURL:'https://cdn.discordapp.com/emojis/123456789012345678.gif',label:'party'});
+  // このサーバーの絵文字と Unicode 絵文字はそのまま移せる
+  assert.deepEqual(standaloneVisual({content:'<:party:123456789012345678>'},new Set(['123456789012345678'])),{kind:'emoji',content:'<:party:123456789012345678>',label:'party'});
+  assert.deepEqual(standaloneVisual({content:'👍'}),{kind:'emoji',content:'👍',label:'👍'});
+  assert.deepEqual(standaloneVisual({content:'🇯🇵'}),{kind:'emoji',content:'🇯🇵',label:'🇯🇵'});
+  // 本文つき・複数絵文字・スタンプ＋本文は対象外（従来の翻訳に任せる）
+  assert.equal(standaloneVisual({content:'すごい👍'}),null);
+  assert.equal(standaloneVisual({content:'👍👍'}),null);
+  assert.equal(standaloneVisual({content:'見て',stickers:sticker(1)}),null);
+  assert.equal(standaloneVisual({content:''}),null);
+});
+
+test('sticker-only and emoji-only messages are relayed as visuals without calling the translator', async () => {
+  const dir = mkdtempSync(join(tmpdir(),'tonarium-discord-'));
+  const store = new Store(join(dir,'state.sqlite'));
+  try {
+    let translations = 0;
+    const translator = {translate:async () => { translations++; throw new Error('must not be called'); }};
+    const transport = new DiscordTransport({discordChannelId:'channel-1',discordToken:'set'},store,translator);
+    const rest = fakeRest();
+    const basePost = rest.post.bind(rest);
+    rest.post = async (route,options) => { const result = await basePost(route,options); return route.startsWith('/webhooks/') ? {id:'copy-1'} : result; };
+    transport.poster = new Poster(rest,translator);
+    const author = {username:'kokoa'};
+    await transport.translateUser({id:'msg-sticker',content:'',author,stickers:new Map([['s',{id:'123456789012345678',name:'wave',format:1}]])},'thread-1');
+    await transport.translateUser({id:'msg-emoji',content:'👍',author},'thread-1');
+    assert.equal(translations,0);
+    assert.equal(rest.posts.length,2);
+    const [stickerPost,emojiPost] = rest.posts;
+    assert.equal(stickerPost.body.content,undefined);
+    assert.deepEqual(stickerPost.body.embeds,[{image:{url:'https://cdn.discordapp.com/stickers/123456789012345678.png'}}]);
+    assert.equal(stickerPost.body.username,'kokoa');
+    assert.equal(emojiPost.body.content,'👍');
+    // リアクション転送で使えるよう、原投稿とコピーの対応が残る
+    assert.deepEqual(transport.relayedMessages.get('msg-sticker'),{channelId:'thread-1',messageId:'copy-1'});
+    transport.client.destroy();
+  } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('history shows sticker-only messages as stickers instead of attachment-only', () => {
+  const message = {author:{id:'user-1',username:'kokoa'},content:'',webhookId:'',attachments:new Map(),stickers:new Map([['s',{name:'wave'}]])};
+  assert.equal(historyLine(message,'bot-1',{}),'kokoa: [スタンプ: wave]');
 });

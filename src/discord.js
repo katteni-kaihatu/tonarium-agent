@@ -39,6 +39,46 @@ async function resizedCopy(inputPath, outputPath) {
 const legacyTranslationBlock = '\n\n🌐 **翻訳 / Translations / 번역**';
 const translationBlock = /\n\n(?=(?:🇯🇵|🇺🇸|🇰🇷) )/u;
 
+const stickerFormats = { 1:'png', 2:'png', 4:'gif' }; // 3 は Lottie（JSON）で画像としては扱えない
+// スタンプの画像 URL。Lottie はラスタ画像が CDN に無いので、Discord のメディアプロキシの PNG プレビューで代替する（ベストエフォート）
+export function stickerImageURL(sticker) {
+  if (!sticker?.id) return '';
+  const extension = stickerFormats[sticker.format];
+  if (extension) return `https://cdn.discordapp.com/stickers/${sticker.id}.${extension}`;
+  return `https://media.discordapp.net/stickers/${sticker.id}.png`;
+}
+
+const customEmojiPattern = /^<(a?):([\p{L}\p{N}_]{2,32}):(\d{17,20})>$/u;
+// 書記素が1つだけで、それが絵文字（国旗・合体絵文字・キーボード絵文字を含む）かどうか
+function isSingleUnicodeEmoji(text) {
+  try {
+    const segments = [...new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(text)];
+    if (segments.length !== 1) return false;
+  } catch { return false; }
+  return /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}\p{Regional_Indicator}|[#*0-9]️⃣)/u.test(text);
+}
+
+// 本文の無い・本文が絵文字だけの発言について、翻訳ではなく見た目を移すための情報を返す。
+// 移せる絵文字（Unicode／このサーバーのカスタム絵文字）は content のまま、
+// 移せないカスタム絵文字とスタンプは imageURL で返す。対象でなければ null
+export function standaloneVisual(message, localEmojiIds = new Set()) {
+  const content = String(message?.content || '').trim();
+  const stickers = message?.stickers?.size ? [...message.stickers.values()] : (Array.isArray(message?.stickers) ? message.stickers : []);
+  if (!content && stickers.length === 1) {
+    const imageURL = stickerImageURL(stickers[0]);
+    return imageURL ? { kind:'sticker', imageURL, label:String(stickers[0].name || 'スタンプ') } : null;
+  }
+  if (!content) return null;
+  const custom = content.match(customEmojiPattern);
+  if (custom) {
+    const [,animated,name,id] = custom;
+    if (localEmojiIds.has(id)) return { kind:'emoji', content, label:name };
+    return { kind:'emoji', imageURL:`https://cdn.discordapp.com/emojis/${id}.${animated ? 'gif' : 'png'}`, label:name };
+  }
+  if (isSingleUnicodeEmoji(content)) return { kind:'emoji', content, label:content };
+  return null;
+}
+
 // 翻訳の併記は同じ内容の繰り返しなので、AI に渡す会話から外す
 export function historyLine(message, botId, webhooks = {}) {
   const webhookId = message.webhookId || message.webhook_id || '';
@@ -48,8 +88,9 @@ export function historyLine(message, botId, webhooks = {}) {
   const content = String(message.content || '');
   if (own && content.startsWith('🌐 **')) return '';
   const text = own ? content.split(legacyTranslationBlock)[0].split(translationBlock)[0].trim() : content;
+  const stickers = message.stickers?.size ? [...message.stickers.values()].map(sticker => sticker.name).filter(Boolean) : [];
   const attachments = message.attachments?.size ? ` [添付: ${[...message.attachments.values()].map(x => x.url).join(', ')}]` : '';
-  return `${own ? `Bot(${message.author.username})` : message.author?.username || 'user'}: ${text || '[添付のみ]'}${attachments}`;
+  return `${own ? `Bot(${message.author.username})` : message.author?.username || 'user'}: ${text || (stickers.length ? `[スタンプ: ${stickers.join(', ')}]` : '[添付のみ]')}${attachments}`;
 }
 
 export class DiscordTransport {
@@ -65,6 +106,8 @@ export class DiscordTransport {
     this.ownThreads = new Set();
     this.seedMessages = new Map();
     this.translatedMessageIds = new Set();
+    // 原投稿の ID → 翻訳コピー投稿 {channelId, messageId}。リアクション転送で対応付けるために保持する
+    this.relayedMessages = new Map();
     this.poster = null;
   }
   get speaker() {
@@ -184,14 +227,30 @@ export class DiscordTransport {
     if (!message || message.id !== messageId || message.author.bot) return '';
     return `${message.author.username}: ${message.content || '[添付のみ]'}${message.attachments.size ? ` [添付: ${[...message.attachments.values()].map(attachment => attachment.url).join(', ')}]` : ''}`;
   }
+  localEmojiIds(message) {
+    try {
+      const guild = message?.guild || this.client.guilds?.cache?.get(message?.guildId);
+      const cache = guild?.emojis?.cache;
+      return new Set(cache?.keys ? [...cache.keys()] : []);
+    } catch { return new Set(); }
+  }
   async translateUser(message, threadId) {
-    if (!this.config.discordToken || !this.translator || !message.content?.trim() || this.translatedMessageIds.has(message.id)) return;
+    if (!this.config.discordToken || !this.translator || this.translatedMessageIds.has(message.id)) return;
+    // スタンプ単体・絵文字単体の発言は翻訳する本文が無いので、見た目をそのまま移す
+    const visual = standaloneVisual(message, this.localEmojiIds(message));
+    if (!message.content?.trim() && !visual) return;
     this.translatedMessageIds.add(message.id);
     if (this.translatedMessageIds.size > 1000) this.translatedMessageIds.clear();
     try {
       const username = (message.member?.displayName || message.author.displayName || message.author.username || 'user').slice(0,80);
       const avatarURL = message.member?.displayAvatarURL?.({extension:'png',size:256}) || message.author.displayAvatarURL?.({extension:'png',size:256}) || '';
-      await this.speaker.relay(threadId,message.content,{username,avatarURL});
+      const relayId = visual
+        ? await this.speaker.relayVisual(threadId,{username,avatarURL,content:visual.content || '',imageURL:visual.imageURL || ''})
+        : await this.speaker.relay(threadId,message.content,{username,avatarURL});
+      if (relayId) {
+        this.relayedMessages.set(message.id,{channelId:threadId,messageId:String(relayId)});
+        if (this.relayedMessages.size > 1000) this.relayedMessages.clear();
+      }
     } catch (error) { console.error('translation of user message', error); }
   }
   async say(threadId, text, { mentionUserId = '', as = '' } = {}) {
