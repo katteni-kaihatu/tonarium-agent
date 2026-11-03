@@ -48,7 +48,8 @@ export function stickerImageURL(sticker) {
   return `https://media.discordapp.net/stickers/${sticker.id}.png`;
 }
 
-const customEmojiPattern = /^<(a?):([\p{L}\p{N}_]{2,32}):(\d{17,20})>$/u;
+// Discord のカスタム絵文字名は [A-Za-z0-9_] の 2〜32 文字。それ以外は絵文字記法として送られてこない
+const customEmojiPattern = /^<(a?):([A-Za-z0-9_]{2,32}):(\d{17,20})>$/;
 // 書記素が1つだけで、それが絵文字（国旗・合体絵文字・キーボード絵文字を含む）かどうか
 function isSingleUnicodeEmoji(text) {
   try {
