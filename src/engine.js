@@ -627,22 +627,22 @@ ${history}
     const unknowns = this.unknowns(id);
     return `${purpose ? `依頼者の目的: ${purpose}\n\n` : ''}${this.store.getKv(`task:${id}`) || ticket.summary}\n\n受け入れ条件:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}${this.investigation(id) ? `\n\nこれは調査案件です。成果物は調査報告（原因の仮説、確認した範囲、否定できた原因、残った可能性、次に必要な証拠）で、報告書の本文にそのまま書いてください。原因が特定できて安全に直せる場合のみ変更します。変更がないこと自体は失敗ではありません。` : ''}${unknowns.length ? `\n\n未確認事項（聞き取りで確認できなかった点。推測で決めず、まずコードや再現で確かめる。聞き取りで質問済みの内容をそのまま聞き直さない）:\n${unknowns.map(x => `- ${x}`).join('\n')}` : ''}${linked.length ? `\n\n追加の声:\n${linked.join('\n')}` : ''}${addenda.length ? `\n\nスレッドでの追加の発言（目的に照らして取り込み、矛盾するなら NEEDS_CLARIFICATION で質問）:\n${addenda.map(x => `- ${x}`).join('\n')}` : ''}${previous?.error && retryStage !== 'publish' ? `\n\n前回の失敗を修正してください:\n${trim(previous.error,1500)}` : ''}${retryInstruction && retryStage !== 'publish' ? `\n\nPM からの再作業指示:\n${retryInstruction}` : ''}`;
   }
-  async designReview(id, ticket, task, path) {
+  async designReview(id, ticket, task, path, report = '') {
     if (!this.git.reviewDiff) return null;
     let role;
     try {
       const diff = await this.git.reviewDiff(path);
       if (!diff.trim()) return null;
       role = await this.acquireRole('開発リード',id);
-      return await this.ai.ask(role.name, `実装担当の差分を、案件の目的・開発方針・判断基準に照らして確認してください。受け入れ条件を満たすためだけの特別扱いやハードコード、既存の仕組みと重複する新しい仕組み、目的に関係ない変更、判断基準の「断る」に当たる変更、変更履歴（changelog/・shared/changelog.ts）の編集を探します。返す JSON: {"approve":boolean,"guardrailViolation":boolean,"issues":["実装担当が直すべき点"],"summary":"短い所見"}。\n\n案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,criteria:JSON.parse(ticket.criteria || '[]')})}\n作業指示:\n${trim(task,6000)}\n\n差分:\n${diff}`, {guide:'review',cwd:path,repoReadOnly:true,timeoutMs:5*60_000,roleId:role.id});
+      return await this.ai.ask(role.name, `実装担当の差分を、案件の目的・開発方針・判断基準に照らして確認してください。受け入れ条件を満たすためだけの特別扱いやハードコード、既存の仕組みと重複する新しい仕組み、目的に関係ない変更、判断基準の「断る」に当たる変更、変更履歴（changelog/・shared/changelog.ts）の編集を探します。返す JSON: {"approve":boolean,"guardrailViolation":boolean,"issues":["実装担当が直すべき点"],"summary":"短い所見"}。\n\n案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,criteria:JSON.parse(ticket.criteria || '[]')})}\n作業指示:\n${trim(task,6000)}\nBuilder report:\n${String(report).slice(-9000)}\n\n差分:\n${diff}`, {guide:'review',cwd:path,repoReadOnly:true,timeoutMs:5*60_000,roleId:role.id});
     } catch (error) {
       this.event(id,role?.id || 'lead','review_warning',trim(error.message,300));
       return null;
     } finally { if (role) this.releaseRole(role); }
   }
-  prBody(ticket, issue, baseSha, changes, threadUrl, reviewNote = '') {
+  prBody(ticket, issue, baseSha, changes, threadUrl, reviewNote = '', risks = []) {
     const criteria = JSON.parse(ticket.criteria || '[]').map(x => `- ${x}`).join('\n');
-    return `## 利用者向けの変更\n\n${(changes.length ? changes : ['（実装担当の報告なし。差分から確認してください）']).map(x => `- ${x}`).join('\n')}\n\n## 背景と目的\n\n${ticket.summary}\n${criteria ? `\n受け入れ条件:\n${criteria}\n` : ''}\nDiscord thread: ${threadUrl || ticket.id}\n\n## 確認したこと\n\nnpm ci, npm run typecheck, npm run build, npm run test:client, npm run test:sync（Tonarium Agent が実行）\nFeedback base: ${baseSha}${reviewNote ? `\n\n設計レビューの指摘（実装担当が修正済み、再レビューなし）:\n${reviewNote}` : ''}${issue ? `\n\nCloses #${issue}` : ''}`;
+    return `## 利用者向けの変更\n\n${(changes.length ? changes : ['（実装担当の報告なし。差分から確認してください）']).map(x => `- ${x}`).join('\n')}${risks.length ? `\n\n## 残ったリスク・未確認\n\n${risks.map(x => `- ${x}`).join('\n')}` : ''}\n\n## 背景と目的\n\n${ticket.summary}\n${criteria ? `\n受け入れ条件:\n${criteria}\n` : ''}\nDiscord thread: ${threadUrl || ticket.id}\n\n## 確認したこと\n\nnpm ci, npm run typecheck, npm run build, npm run test:client, npm run test:sync（Tonarium Agent が実行）\nFeedback base: ${baseSha}${reviewNote ? `\n\n設計レビューの指摘（実装担当が修正済み、再レビューなし）:\n${reviewNote}` : ''}${issue ? `\n\nCloses #${issue}` : ''}`;
   }
   async implement(id, worker) {
     let worktree, completed = false, stage = 'code';
@@ -681,7 +681,7 @@ ${history}
           await this.askUser(id, worker.id, `追加確認が必要です。${trim(report, 1200)}`);
           return;
         }
-        const review = await this.designReview(id,ticket,task,worktree.path);
+        const review = await this.designReview(id,ticket,task,worktree.path,report);
         if (review?.guardrailViolation) {
           this.store.update(id,{worker:null});
           this.event(id,'lead','review_blocked',trim(review.summary || asList(review.issues).join(' / '),500));
@@ -713,7 +713,8 @@ ${history}
       }
       let changes = [];
       try { changes = asList(JSON.parse(this.store.getKv(`user-changes:${id}`) || '[]')); } catch { /* fall back to the summary */ }
-      const pr = await this.git.findPr(worktree.branch) || await this.git.pr(ticket.title, this.prBody(this.store.get(id),issue,baseSha,changes,threadUrl,reviewNote), worktree.branch);
+      const risks = this.storedList(`unverified:${id}`);
+      const pr = await this.git.findPr(worktree.branch) || await this.git.pr(ticket.title, this.prBody(this.store.get(id),issue,baseSha,changes,threadUrl,reviewNote,risks), worktree.branch);
       if (!pr) throw new Error(`Could not find or create PR for ${worktree.branch}`);
       this.store.update(id, { status: 'pr_ready', pr_number: pr, branch: worktree.branch, worker: null });
       this.store.setKv(`retry-stage:${id}`,'');
@@ -721,11 +722,11 @@ ${history}
       this.event(id, worker.id, 'pr_ready', `PR #${pr} を検証済み。出荷待ち`);
       completed = true;
       const visibleChanges = changes.filter(value => value !== 'なし');
-      const unverified = this.storedList(`unverified:${id}`);
+      const unverified = risks;
       const checks = this.productionChecks(id);
       const lines = [`変更とテストが完了しました。PR #${pr} を出荷待ちに入れました。`];
       if (visibleChanges.length) lines.push(`変わること:\n${visibleChanges.map(value => `- ${value}`).join('\n')}`);
-      if (unverified.length) lines.push(`未確認の点:\n${unverified.map(value => `- ${value}`).join('\n')}`);
+      if (unverified.length) lines.push(`残ったリスク・未確認の点:\n${unverified.map(value => `- ${value}`).join('\n')}`);
       if (checks.length) lines.push(`本番で確認をお願いしたい点:\n${checks.map(value => `- ${value}`).join('\n')}`);
       await this.post(id, worker.id, lines.join('\n')).catch(error => this.event(id,worker.id,'discord_warning',trim(error.message,300)));
     } catch (error) {

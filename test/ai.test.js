@@ -53,4 +53,5 @@ test('unverified points are parsed separately and never leak into user-facing ch
   assert.deepEqual(userFacingChanges(reversed),['ボタンが揃う']);
   assert.deepEqual(unverifiedPoints(reversed),['実機の見た目は未確認']);
   assert.deepEqual(unverifiedPoints('報告だけ'),[]);
+  assert.deepEqual(unverifiedPoints('UNVERIFIED_POINTS:\n- なし\nUSER_FACING_CHANGES:\n- ボタンが揃う'),[]);
 });
