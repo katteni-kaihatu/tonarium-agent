@@ -35,7 +35,7 @@ export function userFacingChanges(report) {
 }
 
 export function unverifiedPoints(report) {
-  return markedBullets(report, UNVERIFIED_MARK, [USER_FACING_MARK]);
+  return markedBullets(report, UNVERIFIED_MARK, [USER_FACING_MARK]).filter(point => point !== 'なし');
 }
 
 function jsonFromText(text) {
