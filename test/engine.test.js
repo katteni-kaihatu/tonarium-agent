@@ -631,6 +631,19 @@ test('prBody omits the risks section when there are no reported risks', async ()
   } finally { f.close(); }
 });
 
+test('design review receives the builder report and code diff', async () => {
+  const f = fixture();
+  try {
+    let prompt = '';
+    f.engine.git.reviewDiff = async () => '+ changed line';
+    f.engine.ai = { ask: async (_role, text) => { prompt = text; return { approve: true }; } };
+    const report = 'UNVERIFIED_POINTS:\n- 多人数では未確認（参加者一覧）';
+    await f.engine.designReview('task', { title: '一覧', summary: '表示を改善', criteria: '[]' }, '一覧を直す', f.dir, report);
+    assert.match(prompt, /Builder report:\nUNVERIFIED_POINTS:\n- 多人数では未確認/);
+    assert.match(prompt, /差分:\n\+ changed line/);
+  } finally { f.close(); }
+});
+
 test('an investigation with no code changes completes with a report instead of failing', async () => {
   const f = fixture();
   try {

@@ -627,14 +627,14 @@ ${history}
     const unknowns = this.unknowns(id);
     return `${purpose ? `依頼者の目的: ${purpose}\n\n` : ''}${this.store.getKv(`task:${id}`) || ticket.summary}\n\n受け入れ条件:\n${JSON.parse(ticket.criteria).map(x => `- ${x}`).join('\n')}${this.investigation(id) ? `\n\nこれは調査案件です。成果物は調査報告（原因の仮説、確認した範囲、否定できた原因、残った可能性、次に必要な証拠）で、報告書の本文にそのまま書いてください。原因が特定できて安全に直せる場合のみ変更します。変更がないこと自体は失敗ではありません。` : ''}${unknowns.length ? `\n\n未確認事項（聞き取りで確認できなかった点。推測で決めず、まずコードや再現で確かめる。聞き取りで質問済みの内容をそのまま聞き直さない）:\n${unknowns.map(x => `- ${x}`).join('\n')}` : ''}${linked.length ? `\n\n追加の声:\n${linked.join('\n')}` : ''}${addenda.length ? `\n\nスレッドでの追加の発言（目的に照らして取り込み、矛盾するなら NEEDS_CLARIFICATION で質問）:\n${addenda.map(x => `- ${x}`).join('\n')}` : ''}${previous?.error && retryStage !== 'publish' ? `\n\n前回の失敗を修正してください:\n${trim(previous.error,1500)}` : ''}${retryInstruction && retryStage !== 'publish' ? `\n\nPM からの再作業指示:\n${retryInstruction}` : ''}`;
   }
-  async designReview(id, ticket, task, path) {
+  async designReview(id, ticket, task, path, report = '') {
     if (!this.git.reviewDiff) return null;
     let role;
     try {
       const diff = await this.git.reviewDiff(path);
       if (!diff.trim()) return null;
       role = await this.acquireRole('開発リード',id);
-      return await this.ai.ask(role.name, `実装担当の差分を、案件の目的・開発方針・判断基準に照らして確認してください。受け入れ条件を満たすためだけの特別扱いやハードコード、既存の仕組みと重複する新しい仕組み、目的に関係ない変更、判断基準の「断る」に当たる変更、変更履歴（changelog/・shared/changelog.ts）の編集を探します。返す JSON: {"approve":boolean,"guardrailViolation":boolean,"issues":["実装担当が直すべき点"],"summary":"短い所見"}。\n\n案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,criteria:JSON.parse(ticket.criteria || '[]')})}\n作業指示:\n${trim(task,6000)}\n\n差分:\n${diff}`, {guide:'review',cwd:path,repoReadOnly:true,timeoutMs:5*60_000,roleId:role.id});
+      return await this.ai.ask(role.name, `実装担当の差分を、案件の目的・開発方針・判断基準に照らして確認してください。受け入れ条件を満たすためだけの特別扱いやハードコード、既存の仕組みと重複する新しい仕組み、目的に関係ない変更、判断基準の「断る」に当たる変更、変更履歴（changelog/・shared/changelog.ts）の編集を探します。返す JSON: {"approve":boolean,"guardrailViolation":boolean,"issues":["実装担当が直すべき点"],"summary":"短い所見"}。\n\n案件: ${JSON.stringify({title:ticket.title,summary:ticket.summary,criteria:JSON.parse(ticket.criteria || '[]')})}\n作業指示:\n${trim(task,6000)}\nBuilder report:\n${String(report).slice(-9000)}\n\n差分:\n${diff}`, {guide:'review',cwd:path,repoReadOnly:true,timeoutMs:5*60_000,roleId:role.id});
     } catch (error) {
       this.event(id,role?.id || 'lead','review_warning',trim(error.message,300));
       return null;
@@ -681,7 +681,7 @@ ${history}
           await this.askUser(id, worker.id, `追加確認が必要です。${trim(report, 1200)}`);
           return;
         }
-        const review = await this.designReview(id,ticket,task,worktree.path);
+        const review = await this.designReview(id,ticket,task,worktree.path,report);
         if (review?.guardrailViolation) {
           this.store.update(id,{worker:null});
           this.event(id,'lead','review_blocked',trim(review.summary || asList(review.issues).join(' / '),500));
