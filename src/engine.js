@@ -640,9 +640,9 @@ ${history}
       return null;
     } finally { if (role) this.releaseRole(role); }
   }
-  prBody(ticket, issue, baseSha, changes, threadUrl, reviewNote = '') {
+  prBody(ticket, issue, baseSha, changes, threadUrl, reviewNote = '', risks = []) {
     const criteria = JSON.parse(ticket.criteria || '[]').map(x => `- ${x}`).join('\n');
-    return `## 利用者向けの変更\n\n${(changes.length ? changes : ['（実装担当の報告なし。差分から確認してください）']).map(x => `- ${x}`).join('\n')}\n\n## 背景と目的\n\n${ticket.summary}\n${criteria ? `\n受け入れ条件:\n${criteria}\n` : ''}\nDiscord thread: ${threadUrl || ticket.id}\n\n## 確認したこと\n\nnpm ci, npm run typecheck, npm run build, npm run test:client, npm run test:sync（Tonarium Agent が実行）\nFeedback base: ${baseSha}${reviewNote ? `\n\n設計レビューの指摘（実装担当が修正済み、再レビューなし）:\n${reviewNote}` : ''}${issue ? `\n\nCloses #${issue}` : ''}`;
+    return `## 利用者向けの変更\n\n${(changes.length ? changes : ['（実装担当の報告なし。差分から確認してください）']).map(x => `- ${x}`).join('\n')}${risks.length ? `\n\n## 残ったリスク・未確認\n\n${risks.map(x => `- ${x}`).join('\n')}` : ''}\n\n## 背景と目的\n\n${ticket.summary}\n${criteria ? `\n受け入れ条件:\n${criteria}\n` : ''}\nDiscord thread: ${threadUrl || ticket.id}\n\n## 確認したこと\n\nnpm ci, npm run typecheck, npm run build, npm run test:client, npm run test:sync（Tonarium Agent が実行）\nFeedback base: ${baseSha}${reviewNote ? `\n\n設計レビューの指摘（実装担当が修正済み、再レビューなし）:\n${reviewNote}` : ''}${issue ? `\n\nCloses #${issue}` : ''}`;
   }
   async implement(id, worker) {
     let worktree, completed = false, stage = 'code';
@@ -713,7 +713,8 @@ ${history}
       }
       let changes = [];
       try { changes = asList(JSON.parse(this.store.getKv(`user-changes:${id}`) || '[]')); } catch { /* fall back to the summary */ }
-      const pr = await this.git.findPr(worktree.branch) || await this.git.pr(ticket.title, this.prBody(this.store.get(id),issue,baseSha,changes,threadUrl,reviewNote), worktree.branch);
+      const risks = this.storedList(`unverified:${id}`);
+      const pr = await this.git.findPr(worktree.branch) || await this.git.pr(ticket.title, this.prBody(this.store.get(id),issue,baseSha,changes,threadUrl,reviewNote,risks), worktree.branch);
       if (!pr) throw new Error(`Could not find or create PR for ${worktree.branch}`);
       this.store.update(id, { status: 'pr_ready', pr_number: pr, branch: worktree.branch, worker: null });
       this.store.setKv(`retry-stage:${id}`,'');
@@ -721,11 +722,11 @@ ${history}
       this.event(id, worker.id, 'pr_ready', `PR #${pr} を検証済み。出荷待ち`);
       completed = true;
       const visibleChanges = changes.filter(value => value !== 'なし');
-      const unverified = this.storedList(`unverified:${id}`);
+      const unverified = risks;
       const checks = this.productionChecks(id);
       const lines = [`変更とテストが完了しました。PR #${pr} を出荷待ちに入れました。`];
       if (visibleChanges.length) lines.push(`変わること:\n${visibleChanges.map(value => `- ${value}`).join('\n')}`);
-      if (unverified.length) lines.push(`未確認の点:\n${unverified.map(value => `- ${value}`).join('\n')}`);
+      if (unverified.length) lines.push(`残ったリスク・未確認の点:\n${unverified.map(value => `- ${value}`).join('\n')}`);
       if (checks.length) lines.push(`本番で確認をお願いしたい点:\n${checks.map(value => `- ${value}`).join('\n')}`);
       await this.post(id, worker.id, lines.join('\n')).catch(error => this.event(id,worker.id,'discord_warning',trim(error.message,300)));
     } catch (error) {

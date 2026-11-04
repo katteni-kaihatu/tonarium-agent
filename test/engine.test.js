@@ -591,6 +591,7 @@ test('the completion post shows user-facing changes, unverified points and produ
     f.store.create('task','ボタン配置');
     f.store.update('task',{status:'queued',summary:'目的: 揃えたい',criteria:JSON.stringify(['ボタンが揃う'])});
     f.store.setKv('production-checks:task', JSON.stringify(['実機で表示を確認']));
+    let prBodyText = '';
     f.engine.git = {
       ...f.engine.git,
       prepare:async () => {}, issue:async () => 7,
@@ -601,7 +602,7 @@ test('the completion post shows user-facing changes, unverified points and produ
       test:async () => {},
       commitPush:async () => {},
       findPr:async () => null,
-      pr:async () => 43,
+      pr:async (_title,body) => { prBodyText = body; return 43; },
       removeWorktree:async () => {}
     };
     f.engine.ai = {
@@ -613,8 +614,20 @@ test('the completion post shows user-facing changes, unverified points and produ
     const post = f.sent.at(-1).text;
     assert.match(post,/変更とテストが完了しました。PR #43/);
     assert.match(post,/変わること:\n- ボタンの位置が揃う/);
-    assert.match(post,/未確認の点:\n- スマホ幅の見た目は未確認/);
+    assert.match(post,/残ったリスク・未確認の点:\n- スマホ幅の見た目は未確認/);
+    assert.match(prBodyText,/## 残ったリスク・未確認\n\n- スマホ幅の見た目は未確認/);
     assert.match(post,/本番で確認をお願いしたい点:\n- 実機で表示を確認/);
+  } finally { f.close(); }
+});
+
+test('prBody omits the risks section when there are no reported risks', async () => {
+  const f = fixture();
+  try {
+    const ticket = { id:'t1', summary:'概要', criteria:JSON.stringify(['条件1']) };
+    const without = f.engine.prBody(ticket, null, 'base123', ['変わること'], '', '');
+    assert.doesNotMatch(without,/残ったリスク・未確認/);
+    const withRisks = f.engine.prBody(ticket, null, 'base123', ['変わること'], '', '', ['大人数だと重くなることがあります（表示の更新）']);
+    assert.match(withRisks,/## 残ったリスク・未確認\n\n- 大人数だと重くなることがあります（表示の更新）/);
   } finally { f.close(); }
 });
 
