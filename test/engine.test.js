@@ -289,6 +289,46 @@ test('PM reviews the second failed Web check and orders a bounded repair', async
   } finally { f.close(); }
 });
 
+test('a saved CI repair instruction changes the worktree before local validation', async () => {
+  const f = fixture();
+  try {
+    f.store.create('ticket','ADの同期');
+    f.store.update('ticket',{pr_number:454});
+    f.store.setKv('release-instruction:ticket','失敗した同期テストの原因を修正');
+    const calls = [];
+    f.engine.ai = {code:async (_role,prompt) => {
+      calls.push('repair');
+      assert.match(prompt,/失敗した同期テストの原因を修正/);
+      assert.match(prompt,/sleep investigation failed/);
+      return '修正しました';
+    }};
+    f.engine.git = {
+      failedCheckDetails:async () => 'sleep investigation failed',
+      git:async args => {
+        calls.push(args[0]);
+        return {stdout:args[0] === 'status' ? ' M client/src/ad/sync.test.ts' : ''};
+      },
+      test:async () => { calls.push('test'); }
+    };
+    await f.engine.testAndRepairIntegration(f.store.get('ticket'),'candidate');
+    assert.deepEqual(calls,['repair','status','test','add','commit']);
+  } finally { f.close(); }
+});
+
+test('release failure question includes the failing CI log', async () => {
+  const f = fixture();
+  try {
+    f.store.create('ticket','ADの同期');
+    f.store.update('ticket',{status:'pr_ready',pr_number:454});
+    f.engine.git.failedCheckDetails = async () => 'sleep investigation: expected 3610000, got 10100';
+    let prompt = '';
+    f.engine.ai = {ask:async (_role,text) => { prompt = text; return {question:'失敗した同期テストを修正して再開しますか？'}; }};
+    await f.engine.askUserAfterFailures('ticket',new Error('Web checks failed'),'release');
+    assert.match(prompt,/expected 3610000, got 10100/);
+    assert.equal(f.store.get('ticket').status,'waiting_info');
+  } finally { f.close(); }
+});
+
 test('scheduler starts release on the next tick when batching is zero', async () => {
   const f = fixture();
   try {

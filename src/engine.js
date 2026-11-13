@@ -804,6 +804,9 @@ ${history}
   }
   async askUserAfterFailures(id,error,stage = 'code') {
     const message = trim(error?.message || error,2000);
+    const details = stage === 'release' && this.store.get(id)?.pr_number && this.git.failedCheckDetails
+      ? await this.git.failedCheckDetails(this.store.get(id).pr_number).catch(() => '')
+      : '';
     this.store.setKv(`awaiting-instruction:${id}`,'1');
     this.store.setKv(`awaiting-instruction-stage:${id}`,stage);
     this.store.setKv(`failed-review-count:${id}`,3);
@@ -815,7 +818,7 @@ ${history}
       role = await this.acquireRole('PM',id);
       const worktree = stage === 'release' ? null : await this.git.resumeTaskWorktree(id).catch(() => null);
       const prompt = stage === 'release'
-        ? `同じPRの出荷検証がPMによる修正後も失敗しました。自動再試行を止めました。CIエラーとPRの状態から、スレ主に修正・再開か保留かを選んでもらう具体的な質問を一つ作ってください。技術的な原因を短く説明します。返す JSON: {"question":"ユーザーへの質問"}。\n\n案件: ${this.store.get(id)?.title}\nPR #${this.store.get(id)?.pr_number}\n失敗: ${message}`
+        ? `同じPRの出荷検証がPMによる修正後も失敗しました。自動再試行を止めました。CIログを読み、確認できた失敗箇所を説明して、スレ主に修正・再開か保留かを選んでもらう具体的な質問を一つ作ってください。ログで確認できない原因は断定しないでください。返す JSON: {"question":"ユーザーへの質問"}。\n\n案件: ${this.store.get(id)?.title}\nPR #${this.store.get(id)?.pr_number}\n失敗: ${message}\nCIログ: ${trim(details,8000) || '取得できませんでした'}`
         : `同じ案件が2回失敗しました。自動再試行は止めます。残っている作業ツリーと失敗内容を調べ、ユーザーが次の方針を指示できる具体的な質問を一つ作ってください。技術的な原因は短く説明し、実装の詳細が分からない人にも選べる案を添えます。返す JSON: {"question":"ユーザーへの質問"}。\n\n案件: ${this.store.get(id)?.title}\n失敗: ${message}`;
       const result = await this.ai.ask(role.name,prompt,{provider:this.config.intakeProvider || 'codex',cwd:worktree?.path || this.config.repo,repoReadOnly:true,timeoutMs:2*60_000,roleId:role.id});
       question = trim(result.question || question,1000);
@@ -835,7 +838,7 @@ ${history}
     let role;
     try {
       role = await this.acquireRole('PM',id);
-      const details = await this.git.failedCheckDetails?.(ticket.pr_number).catch(() => '') || '';
+      const details = this.git.failedCheckDetails ? await this.git.failedCheckDetails(ticket.pr_number).catch(() => '') : '';
       const decision = await this.ai.ask(role.name, `出荷段階で同じPRが2回以上失敗しています。CIログとエラーと作業ツリーのコードを調べ、統合担当が修正できるなら retry=true とし、具体的な修正指示を書いてください。変更なしの再実行だけは指示しないでください。製品判断や認証など人の判断が必要なら retry=false にしてください。返す JSON: {"retry":boolean,"instruction":"統合担当への修正指示","reason":"判断理由"}。\n\n案件: ${ticket.title}\nPR #${ticket.pr_number}\nエラー: ${trim(error.message,2000)}\nCIログ: ${trim(details,10000)}\nPMによる修正指示: ${repairs}/2`, {provider:this.config.intakeProvider || 'codex',cwd:worktreePath || this.config.repo,repoReadOnly:true,timeoutMs:2*60_000,roleId:role.id});
       if (decision.retry === true && String(decision.instruction || '').trim()) {
         this.store.setKv(`release-pm-repairs:${id}`,repairs + 1);
@@ -951,6 +954,16 @@ ${history}
   }
   async testAndRepairIntegration(ticket,path) {
     let repaired = false;
+    const releaseInstruction = this.store.getKv(`release-instruction:${ticket.id}`);
+    if (releaseInstruction) {
+      const details = this.git.failedCheckDetails ? await this.git.failedCheckDetails(ticket.pr_number).catch(() => '') : '';
+      this.event(ticket.id,'pm','repair_requested',`前回のCI失敗を修正: ${trim(releaseInstruction,400)}`);
+      const report = await this.ai.code(roleName('integrator'), `前回のGitHubチェックが失敗しました。次の指示とCIログを調べ、現在の作業ツリーで原因を修正してください。既存のテストを弱めたり無効化したりして失敗を隠さないでください。git add/commit/push は行わないでください。案件: ${ticket.title}。\n修正指示: ${trim(releaseInstruction,1500)}\nCIログ: ${trim(details,10000) || '取得できませんでした'}`, path, {provider:this.config.integrationProvider,reportChanges:false,timeoutMs:15*60_000,roleId:'integrator'});
+      const status = await this.git.git(['status','--porcelain'],path);
+      if (!status.stdout) throw new Error('Integrator made no changes to repair the failed CI check');
+      this.event(ticket.id,'integrator','repair_applied',trim(report,300));
+      repaired = true;
+    }
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         await this.git.test(path);
