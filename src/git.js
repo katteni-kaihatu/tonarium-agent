@@ -5,6 +5,15 @@ import { command } from './command.js';
 
 const changelogPaths = ['changelog','shared/changelog.ts'];
 
+export function failedLogExcerpt(output) {
+  const clean = String(output || '').replace(/\x1b\[[0-9;]*m/g,'');
+  const highlights = clean.split(/\r?\n/)
+    .filter(line => /✖|not ok\s+\d+|AssertionError|actual:|expected:|error TS\d+|at TestContext|##\[error\]/i.test(line))
+    .map(line => line.split('\t').slice(-1)[0].trim())
+    .filter(Boolean).slice(0,30);
+  return `${highlights.join('\n')}\n\nログ末尾:\n${clean.slice(-2200)}`.slice(0,5500);
+}
+
 export class GitHub {
   constructor(config, root) { this.config = config; this.root = root; this.worktrees = join(root, '.worktrees'); }
   git(args, cwd = this.config.repo, options = {}) { return command('git', args, { cwd, ...options }); }
@@ -82,6 +91,7 @@ export class GitHub {
     await command('npm', ['run','test:client'], { cwd: path, timeoutMs: 15 * 60_000 });
     await command('npm', ['run','test:sync'], { cwd: path, timeoutMs: 15 * 60_000 });
     const scripts = JSON.parse(await readFile(join(path,'package.json'),'utf8')).scripts || {};
+    if (scripts['test:ad']) await command('npm', ['run','test:ad'], { cwd: path, timeoutMs: 15 * 60_000 });
     if (scripts['test:shared-assets']) await command('npm', ['run','test:shared-assets'], { cwd: path, timeoutMs: 15 * 60_000 });
   }
   async issue(title, body) {
@@ -146,7 +156,7 @@ export class GitHub {
     for (const runId of runIds) {
       try {
         const result = await this.gh(['run','view',runId,'--repo',this.config.githubRepo,'--log-failed'],this.config.repo,{timeoutMs:60_000});
-        summaries.push(`Run ${runId}: ${result.stdout.slice(-9000)}`);
+        summaries.push(`Run ${runId}: ${failedLogExcerpt(result.stdout)}`);
       } catch (error) { summaries.push(`Run ${runId}: ${String(error.message).slice(-1000)}`); }
     }
     return summaries.join('\n').slice(-12_000);

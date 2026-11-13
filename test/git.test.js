@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GitHub } from '../src/git.js';
+import { GitHub, failedLogExcerpt } from '../src/git.js';
+
+test('CI failure summary keeps the first failing test when the log is long', () => {
+  const log = `web\tRun tests\t✖ sleep investigation: progress rolled back\nweb\tRun tests\tAssertionError: expected progress to survive\n${'unrelated output\n'.repeat(1000)}web\tRun tests\t✖ second failure`;
+  const excerpt = failedLogExcerpt(log);
+  assert.match(excerpt,/sleep investigation: progress rolled back/);
+  assert.match(excerpt,/AssertionError: expected progress to survive/);
+  assert.match(excerpt,/second failure/);
+  assert.ok(excerpt.length < log.length);
+});
 
 class TestGitHub extends GitHub {
   async workflowRunsForCommit() { return []; }
