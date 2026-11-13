@@ -55,6 +55,8 @@ Bot が停止していた間に完了済みスレッドへ届いた質問も、�
 
 実装担当は最大 15 件を並列処理します。変更履歴（`changelog/`・`shared/changelog.ts`）は書かず、利用者向けの変更を PR 本文の「利用者向けの変更」に書きます。履歴を編集してしまった場合は、テスト前に元へ戻します。各案件で `npm ci`、`npm run typecheck`、`npm run build`、`npm run test:client`、`npm run test:sync` を通してから PR を作ります。すずは PR ブランチへ最新 `develop` を取り込み、競合を解決し、統合状態で同じチェックを実行します。みのりは GitHub の Web チェックと実行対象のワークフローすべての完了を待ち、PR の head commit を確認して `develop` にマージします。チェックが現れない場合もマージしません。複数 PR は一件ずつ最新 `develop` へ合わせます。
 
+Volta で起動した Codex には、Volta の管理ディレクトリだけを追加の作業領域として渡します。これにより Codex の作業制限内でも `node`・`npm` を使った調査とテストを実行できます。
+
 ## セットアップ
 
 Node.js 22.13 以降、Git、GitHub CLI (`gh`) が必要です。Codex CLI はこのプロジェクトに `@openai/codex` を固定しています。既定では受付、PM、リード、実装、出荷、通訳の全員が ChatGPT/Codex のサブスクログインを使い、AI 用 API キーを子プロセスへ渡しません。`claude` を明示的に選んだ場合だけ Claude Code CLI が必要です。

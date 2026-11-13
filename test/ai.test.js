@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AI, userFacingChanges, unverifiedPoints } from '../src/ai.js';
+import { AI, userFacingChanges, unverifiedPoints, voltaHomeForNode } from '../src/ai.js';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +12,17 @@ test('Codex intake attaches local screenshot files as image inputs', () => {
   assert.ok(image > 0);
   assert.equal(args[image+1],'C:/feedback/screenshot.png');
   assert.ok(args.includes('read-only'));
+});
+
+test('Codex grants only the active Volta home so node and npm can run in its sandbox', () => {
+  assert.equal(voltaHomeForNode('C:\\Users\\neo\\AppData\\Local\\Volta\\tools\\image\\node\\26.4.0\\node.exe'),
+    'C:\\Users\\neo\\AppData\\Local\\Volta');
+  assert.equal(voltaHomeForNode('/home/neo/.volta/tools/image/node/24.0.0/node'),'/home/neo/.volta');
+  assert.equal(voltaHomeForNode('C:\\Program Files\\nodejs\\node.exe'),'');
+  const args = new AI({}).codexArgs('workspace-write','C:/repo','C:/out.txt');
+  const home = voltaHomeForNode();
+  assert.equal(args.includes('--add-dir'),Boolean(home));
+  if (home) assert.equal(args[args.indexOf('--add-dir') + 1],home);
 });
 
 test('agent guidance reads versioned role Markdown, guardrails and the target direction again for the next run', async () => {

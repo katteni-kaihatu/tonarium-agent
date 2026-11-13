@@ -17,6 +17,12 @@ const withoutPolicy = new Set(['通訳','発話添削']);
 export const USER_FACING_MARK = 'USER_FACING_CHANGES:';
 export const UNVERIFIED_MARK = 'UNVERIFIED_POINTS:';
 
+export function voltaHomeForNode(execPath = process.execPath) {
+  // Volta's shim writes to its home even when only starting node/npm. Codex's
+  // Windows sandbox otherwise blocks that write before any test can run.
+  return String(execPath).match(/^(.*?)[\\/]tools[\\/]image[\\/]node[\\/][^\\/]+[\\/]node(?:\.exe)?$/i)?.[1] || '';
+}
+
 function markedBullets(report, mark, stopMarks) {
   const text = String(report || '');
   const start = text.lastIndexOf(mark);
@@ -88,6 +94,8 @@ export class AI {
     const args = [codexScript,'exec','-m',this.config.codexModel || 'gpt-6.1-sol'];
     if (this.config.codexSpeed === 'fast') args.push('-c','service_tier="fast"','-c','features.fast_mode=true');
     args.push('-c',`model_reasoning_effort="${this.config.codexReasoning || 'medium'}"`);
+    const voltaHome = voltaHomeForNode();
+    if (voltaHome) args.push('--add-dir',voltaHome);
     return [...args,...images.flatMap(path => ['--image',path]),'--ephemeral','--sandbox',sandbox,'-C',cwd,'-o',output,'-'];
   }
   async ask(role, prompt, { provider = this.config.planningProvider, cwd = process.cwd(), timeoutMs = 5 * 60_000, repoReadOnly = false, images = [], guide = '', speaking = false, roleId = '' } = {}) {
